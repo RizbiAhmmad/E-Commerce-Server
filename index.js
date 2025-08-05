@@ -113,6 +113,46 @@ async function run() {
       res.send(result);
     });
 
+   // Add Subcategory
+    app.post("/subcategories", async (req, res) => {
+      const subcategory = req.body;
+      const result = await subcategoriesCollection.insertOne(subcategory);
+      res.send(result);
+    });
+
+    // Get Subcategories (optionally filtered by category)
+    app.get("/subcategories", async (req, res) => {
+      const { categoryId } = req.query;
+      const query = categoryId ? { categoryId } : {};
+      const result = await subcategoriesCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    // Delete Subcategory
+    app.delete("/subcategories/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await subcategoriesCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    // Update Subcategory
+    app.put("/subcategories/:id", async (req, res) => {
+      const id = req.params.id;
+      const data = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          name: data.name,
+          status: data.status,
+          categoryId: data.categoryId,
+        },
+      };
+      const result = await subcategoriesCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
