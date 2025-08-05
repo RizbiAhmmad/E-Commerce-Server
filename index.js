@@ -29,6 +29,7 @@ async function run() {
     const usersCollection = database.collection("users");
     const categoriesCollection = database.collection("categories");
     const subcategoriesCollection = database.collection("subcategories");
+    const brandsCollection = database.collection("brands");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -113,7 +114,7 @@ async function run() {
       res.send(result);
     });
 
-   // Add Subcategory
+    // Add Subcategory
     app.post("/subcategories", async (req, res) => {
       const subcategory = req.body;
       const result = await subcategoriesCollection.insertOne(subcategory);
@@ -153,6 +154,45 @@ async function run() {
       res.send(result);
     });
 
+    // --- Create brand
+    app.post("/brands", async (req, res) => {
+      const brand = req.body; // { name, logo, status, createdByEmail }
+      const exists = await brandsCollection.findOne({ name: brand.name });
+      if (exists)
+        return res.send({
+          acknowledged: true,
+          insertedId: null,
+          message: "Brand exists",
+        });
+      const result = await brandsCollection.insertOne(brand);
+      res.send(result);
+    });
+
+    // --- Get all brands
+    app.get("/brands", async (req, res) => {
+      const result = await brandsCollection.find().toArray();
+      res.send(result);
+    });
+
+    // --- Update brand
+    app.put("/brands/:id", async (req, res) => {
+      const id = req.params.id;
+      const data = req.body; // { name, logo, status }
+      const result = await brandsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { name: data.name, logo: data.logo, status: data.status } }
+      );
+      res.send(result);
+    });
+
+    // --- Delete brand
+    app.delete("/brands/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await brandsCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
