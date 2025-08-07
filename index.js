@@ -30,6 +30,7 @@ async function run() {
     const categoriesCollection = database.collection("categories");
     const subcategoriesCollection = database.collection("subcategories");
     const brandsCollection = database.collection("brands");
+    const sizesCollection = database.collection("sizes");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -191,6 +192,41 @@ async function run() {
       const result = await brandsCollection.deleteOne({
         _id: new ObjectId(id),
       });
+      res.send(result);
+    });
+
+    // Add Size
+    app.post("/sizes", async (req, res) => {
+      const size = req.body;
+      const result = await sizesCollection.insertOne(size);
+      res.send(result);
+    });
+
+    // Get all Sizes
+    app.get("/sizes", async (req, res) => {
+      const result = await sizesCollection.find().toArray();
+      res.send(result);
+    });
+
+    // Delete Size
+    app.delete("/sizes/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await sizesCollection.deleteOne({ _id: new ObjectId(id) });
+      res.send(result);
+    });
+
+    // Update Size
+    app.put("/sizes/:id", async (req, res) => {
+      const id = req.params.id;
+      const data = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          name: data.name,
+          status: data.status,
+        },
+      };
+      const result = await sizesCollection.updateOne(filter, updateDoc);
       res.send(result);
     });
 
