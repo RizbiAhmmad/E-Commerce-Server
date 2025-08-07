@@ -31,6 +31,7 @@ async function run() {
     const subcategoriesCollection = database.collection("subcategories");
     const brandsCollection = database.collection("brands");
     const sizesCollection = database.collection("sizes");
+    const colorsCollection = database.collection("colors");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -227,6 +228,49 @@ async function run() {
         },
       };
       const result = await sizesCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+
+    // Add a new color
+    app.post("/colors", async (req, res) => {
+      const color = req.body; // expects: { name, hex, status }
+      const existing = await colorsCollection.findOne({ name: color.name });
+      if (existing) {
+        return res.send({ message: "Color already exists", insertedId: null });
+      }
+      const result = await colorsCollection.insertOne(color);
+      res.send(result);
+    });
+
+    // Get all colors
+    app.get("/colors", async (req, res) => {
+      const result = await colorsCollection.find().toArray();
+      res.send(result);
+    });
+
+    // Delete a color by ID
+    app.delete("/colors/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await colorsCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    // Update a color
+    app.put("/colors/:id", async (req, res) => {
+      const id = req.params.id;
+      const data = req.body; // expects: { name, hex, status }
+      const result = await colorsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            name: data.name,
+            hex: data.hex,
+            status: data.status,
+          },
+        }
+      );
       res.send(result);
     });
 
