@@ -32,6 +32,7 @@ async function run() {
     const brandsCollection = database.collection("brands");
     const sizesCollection = database.collection("sizes");
     const colorsCollection = database.collection("colors");
+    const productsCollection = database.collection("products");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -272,6 +273,29 @@ async function run() {
         }
       );
       res.send(result);
+    });
+
+    // Add a new product
+    app.post("/products", async (req, res) => {
+      try {
+        const product = req.body; // includes image URL, user email, etc.
+        const result = await productsCollection.insertOne(product);
+        res.send(result);
+      } catch (error) {
+        console.error("Error adding product:", error);
+        res.status(500).send({ message: "Failed to add product" });
+      }
+    });
+
+    // Get all products
+    app.get("/products", async (req, res) => {
+      try {
+        const result = await productsCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching products:", error);
+        res.status(500).send({ message: "Failed to fetch products" });
+      }
     });
 
     // await client.db("admin").command({ ping: 1 });
