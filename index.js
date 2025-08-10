@@ -298,6 +298,66 @@ async function run() {
       }
     });
 
+    // Update a product by ID
+app.put("/products/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updatedProduct = req.body; // full product object with updated images array etc.
+
+    // Validate id
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid product ID" });
+    }
+
+    // Prepare update document
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+      $set: {
+        name: updatedProduct.name,
+        description: updatedProduct.description,
+        specification: updatedProduct.specification,
+        categoryId: updatedProduct.categoryId,
+        subcategoryId: updatedProduct.subcategoryId,
+        brandId: updatedProduct.brandId,
+        sizes: updatedProduct.sizes,
+        colors: updatedProduct.colors,
+        purchasePrice: updatedProduct.purchasePrice,
+        oldPrice: updatedProduct.oldPrice,
+        newPrice: updatedProduct.newPrice,
+        stock: updatedProduct.stock,
+        status: updatedProduct.status,
+        variant: updatedProduct.variant,
+        images: updatedProduct.images, // updated array of image URLs
+        email: updatedProduct.email,
+      },
+    };
+
+    const result = await productsCollection.updateOne(filter, updateDoc);
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ message: "Product not found" });
+    }
+
+    res.send({ acknowledged: true, modifiedCount: result.modifiedCount });
+  } catch (error) {
+    console.error("Error updating product:", error);
+    res.status(500).send({ message: "Failed to update product" });
+  }
+});
+
+app.delete("/products/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await productsCollection.deleteOne({
+      _id: new ObjectId(id),
+    });
+    res.send(result);
+  } catch (error) {
+    console.error("Error deleting product:", error);
+    res.status(500).send({ message: "Failed to delete product" });
+  }
+});
+
     // await client.db("admin").command({ ping: 1 });
     // console.log(
     //   "Pinged your deployment. You successfully connected to MongoDB!"
