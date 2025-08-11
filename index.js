@@ -358,6 +358,25 @@ app.delete("/products/:id", async (req, res) => {
   }
 });
 
+// Get single product by ID
+app.get("/products/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid product ID" });
+    }
+    const product = await productsCollection.findOne({ _id: new ObjectId(id) });
+    if (!product) {
+      return res.status(404).send({ message: "Product not found" });
+    }
+    res.send(product);
+  } catch (error) {
+    console.error("Error fetching product:", error);
+    res.status(500).send({ message: "Failed to fetch product" });
+  }
+});
+
+
     // await client.db("admin").command({ ping: 1 });
     // console.log(
     //   "Pinged your deployment. You successfully connected to MongoDB!"
