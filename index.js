@@ -33,6 +33,7 @@ async function run() {
     const sizesCollection = database.collection("sizes");
     const colorsCollection = database.collection("colors");
     const productsCollection = database.collection("products");
+    const reviewsCollection = database.collection("reviews");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -375,6 +376,48 @@ app.get("/products/:id", async (req, res) => {
     res.status(500).send({ message: "Failed to fetch product" });
   }
 });
+
+app.post("/reviews", async (req, res) => {
+  try {
+    const { productId, rating, text, name, email } = req.body;
+
+    if (!productId || !rating || !text) {
+      return res.status(400).send({ message: "Missing required fields" });
+    }
+
+    const review = {
+      productId: new ObjectId(productId),
+      rating,
+      text,
+      name: name || "Anonymous",
+      email: email || null,
+      createdAt: new Date(),
+    };
+
+    const result = await reviewsCollection.insertOne(review);
+
+    if (result.acknowledged) {
+      review._id = result.insertedId; // add id to the review object
+      res.send({ acknowledged: true, review });
+    } else {
+      res.status(500).send({ acknowledged: false, message: "Failed to add review" });
+    }
+  } catch (error) {
+    console.error("Error adding review:", error);
+    res.status(500).send({ message: "Internal Server Error" });
+  }
+});
+
+app.get("/reviews", async (req, res) => {
+  const { productId } = req.query;
+  let query = {};
+  if (productId) {
+    query.productId = new ObjectId(productId);
+  }
+  const reviews = await reviewsCollection.find(query).sort({ createdAt: -1 }).toArray();
+  res.send(reviews);
+});
+
 
 
     // await client.db("admin").command({ ping: 1 });
