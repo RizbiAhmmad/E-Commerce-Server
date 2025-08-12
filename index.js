@@ -418,6 +418,18 @@ app.get("/reviews", async (req, res) => {
   res.send(reviews);
 });
 
+app.delete("/reviews/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await reviewsCollection.deleteOne({ _id: new ObjectId(id) });
+    res.send(result);
+  } catch (error) {
+    console.error("Error deleting review:", error);
+    res.status(500).send({ message: "Failed to delete review" });
+  }
+});
+
+
 
 
     // await client.db("admin").command({ ping: 1 });
