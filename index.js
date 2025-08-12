@@ -34,6 +34,7 @@ async function run() {
     const colorsCollection = database.collection("colors");
     const productsCollection = database.collection("products");
     const reviewsCollection = database.collection("reviews");
+    const cartCollection = database.collection("cart");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -426,6 +427,32 @@ app.delete("/reviews/:id", async (req, res) => {
   } catch (error) {
     console.error("Error deleting review:", error);
     res.status(500).send({ message: "Failed to delete review" });
+  }
+});
+
+app.post("/cart", async (req, res) => {
+  try {
+    const cartItem = req.body; // name, email, productId, quantity, etc.
+    const result = await cartCollection.insertOne(cartItem);
+    res.send(result);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Failed to add to cart" });
+  }
+});
+
+app.get("/cart", async (req, res) => {
+  const email = req.query.email;
+  if (!email) {
+    return res.status(400).send({ message: "Email is required" });
+  }
+
+  try {
+    const cartItems = await cartCollection.find({ email }).toArray();
+    res.send(cartItems);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Failed to get cart items" });
   }
 });
 
