@@ -456,6 +456,41 @@ app.get("/cart", async (req, res) => {
   }
 });
 
+app.patch("/cart/:id", async (req, res) => {
+  const id = req.params.id;
+  const { quantity, selected } = req.body; // optionally selected
+  const updateDoc = {};
+  if (quantity !== undefined) updateDoc.quantity = quantity;
+  if (selected !== undefined) updateDoc.selected = selected;
+
+  try {
+    const result = await cartCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateDoc }
+    );
+    res.send(result);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Failed to update cart item" });
+  }
+});
+
+app.delete("/cart/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await cartCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ message: "Cart item not found" });
+    }
+
+    res.send({ acknowledged: true, deletedCount: result.deletedCount });
+  } catch (error) {
+    console.error("Error deleting cart item:", error);
+    res.status(500).send({ message: "Failed to delete cart item" });
+  }
+});
+
 
 
 
