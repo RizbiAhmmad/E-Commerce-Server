@@ -35,6 +35,7 @@ async function run() {
     const productsCollection = database.collection("products");
     const reviewsCollection = database.collection("reviews");
     const cartCollection = database.collection("cart");
+    const ordersCollection = database.collection("orders");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -301,198 +302,273 @@ async function run() {
     });
 
     // Update a product by ID
-app.put("/products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const updatedProduct = req.body; // full product object with updated images array etc.
+    app.put("/products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const updatedProduct = req.body; // full product object with updated images array etc.
 
-    // Validate id
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({ message: "Invalid product ID" });
-    }
+        // Validate id
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid product ID" });
+        }
 
-    // Prepare update document
-    const filter = { _id: new ObjectId(id) };
-    const updateDoc = {
-      $set: {
-        name: updatedProduct.name,
-        description: updatedProduct.description,
-        specification: updatedProduct.specification,
-        categoryId: updatedProduct.categoryId,
-        subcategoryId: updatedProduct.subcategoryId,
-        brandId: updatedProduct.brandId,
-        sizes: updatedProduct.sizes,
-        colors: updatedProduct.colors,
-        purchasePrice: updatedProduct.purchasePrice,
-        oldPrice: updatedProduct.oldPrice,
-        newPrice: updatedProduct.newPrice,
-        stock: updatedProduct.stock,
-        status: updatedProduct.status,
-        variant: updatedProduct.variant,
-        images: updatedProduct.images, // updated array of image URLs
-        email: updatedProduct.email,
-      },
-    };
+        // Prepare update document
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = {
+          $set: {
+            name: updatedProduct.name,
+            description: updatedProduct.description,
+            specification: updatedProduct.specification,
+            categoryId: updatedProduct.categoryId,
+            subcategoryId: updatedProduct.subcategoryId,
+            brandId: updatedProduct.brandId,
+            sizes: updatedProduct.sizes,
+            colors: updatedProduct.colors,
+            purchasePrice: updatedProduct.purchasePrice,
+            oldPrice: updatedProduct.oldPrice,
+            newPrice: updatedProduct.newPrice,
+            stock: updatedProduct.stock,
+            status: updatedProduct.status,
+            variant: updatedProduct.variant,
+            images: updatedProduct.images, // updated array of image URLs
+            email: updatedProduct.email,
+          },
+        };
 
-    const result = await productsCollection.updateOne(filter, updateDoc);
+        const result = await productsCollection.updateOne(filter, updateDoc);
 
-    if (result.matchedCount === 0) {
-      return res.status(404).send({ message: "Product not found" });
-    }
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "Product not found" });
+        }
 
-    res.send({ acknowledged: true, modifiedCount: result.modifiedCount });
-  } catch (error) {
-    console.error("Error updating product:", error);
-    res.status(500).send({ message: "Failed to update product" });
-  }
-});
-
-app.delete("/products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const result = await productsCollection.deleteOne({
-      _id: new ObjectId(id),
+        res.send({ acknowledged: true, modifiedCount: result.modifiedCount });
+      } catch (error) {
+        console.error("Error updating product:", error);
+        res.status(500).send({ message: "Failed to update product" });
+      }
     });
-    res.send(result);
-  } catch (error) {
-    console.error("Error deleting product:", error);
-    res.status(500).send({ message: "Failed to delete product" });
-  }
-});
 
-// Get single product by ID
-app.get("/products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({ message: "Invalid product ID" });
-    }
-    const product = await productsCollection.findOne({ _id: new ObjectId(id) });
-    if (!product) {
-      return res.status(404).send({ message: "Product not found" });
-    }
-    res.send(product);
-  } catch (error) {
-    console.error("Error fetching product:", error);
-    res.status(500).send({ message: "Failed to fetch product" });
-  }
-});
+    app.delete("/products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await productsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting product:", error);
+        res.status(500).send({ message: "Failed to delete product" });
+      }
+    });
 
-app.post("/reviews", async (req, res) => {
-  try {
-    const { productId, rating, text, name, email } = req.body;
+    // Get single product by ID
+    app.get("/products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid product ID" });
+        }
+        const product = await productsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!product) {
+          return res.status(404).send({ message: "Product not found" });
+        }
+        res.send(product);
+      } catch (error) {
+        console.error("Error fetching product:", error);
+        res.status(500).send({ message: "Failed to fetch product" });
+      }
+    });
 
-    if (!productId || !rating || !text) {
-      return res.status(400).send({ message: "Missing required fields" });
-    }
+    app.post("/reviews", async (req, res) => {
+      try {
+        const { productId, rating, text, name, email } = req.body;
 
-    const review = {
-      productId: new ObjectId(productId),
-      rating,
-      text,
-      name: name || "Anonymous",
-      email: email || null,
-      createdAt: new Date(),
-    };
+        if (!productId || !rating || !text) {
+          return res.status(400).send({ message: "Missing required fields" });
+        }
 
-    const result = await reviewsCollection.insertOne(review);
+        const review = {
+          productId: new ObjectId(productId),
+          rating,
+          text,
+          name: name || "Anonymous",
+          email: email || null,
+          createdAt: new Date(),
+        };
 
-    if (result.acknowledged) {
-      review._id = result.insertedId; // add id to the review object
-      res.send({ acknowledged: true, review });
-    } else {
-      res.status(500).send({ acknowledged: false, message: "Failed to add review" });
-    }
-  } catch (error) {
-    console.error("Error adding review:", error);
-    res.status(500).send({ message: "Internal Server Error" });
-  }
-});
+        const result = await reviewsCollection.insertOne(review);
 
-app.get("/reviews", async (req, res) => {
-  const { productId } = req.query;
-  let query = {};
-  if (productId) {
-    query.productId = new ObjectId(productId);
-  }
-  const reviews = await reviewsCollection.find(query).sort({ createdAt: -1 }).toArray();
-  res.send(reviews);
-});
+        if (result.acknowledged) {
+          review._id = result.insertedId; // add id to the review object
+          res.send({ acknowledged: true, review });
+        } else {
+          res
+            .status(500)
+            .send({ acknowledged: false, message: "Failed to add review" });
+        }
+      } catch (error) {
+        console.error("Error adding review:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
 
-app.delete("/reviews/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const result = await reviewsCollection.deleteOne({ _id: new ObjectId(id) });
-    res.send(result);
-  } catch (error) {
-    console.error("Error deleting review:", error);
-    res.status(500).send({ message: "Failed to delete review" });
-  }
-});
+    app.get("/reviews", async (req, res) => {
+      const { productId } = req.query;
+      let query = {};
+      if (productId) {
+        query.productId = new ObjectId(productId);
+      }
+      const reviews = await reviewsCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(reviews);
+    });
 
-app.post("/cart", async (req, res) => {
-  try {
-    const cartItem = req.body; // name, email, productId, quantity, etc.
-    const result = await cartCollection.insertOne(cartItem);
-    res.send(result);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Failed to add to cart" });
-  }
-});
+    app.delete("/reviews/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await reviewsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting review:", error);
+        res.status(500).send({ message: "Failed to delete review" });
+      }
+    });
 
-app.get("/cart", async (req, res) => {
-  const email = req.query.email;
-  if (!email) {
-    return res.status(400).send({ message: "Email is required" });
-  }
+    app.post("/cart", async (req, res) => {
+      try {
+        const cartItem = req.body; // name, email, productId, quantity, etc.
+        const result = await cartCollection.insertOne(cartItem);
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to add to cart" });
+      }
+    });
 
-  try {
-    const cartItems = await cartCollection.find({ email }).toArray();
-    res.send(cartItems);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Failed to get cart items" });
-  }
-});
+    app.get("/cart", async (req, res) => {
+      const email = req.query.email;
+      if (!email) {
+        return res.status(400).send({ message: "Email is required" });
+      }
 
-app.patch("/cart/:id", async (req, res) => {
-  const id = req.params.id;
-  const { quantity, selected } = req.body; // optionally selected
-  const updateDoc = {};
-  if (quantity !== undefined) updateDoc.quantity = quantity;
-  if (selected !== undefined) updateDoc.selected = selected;
+      try {
+        const cartItems = await cartCollection.find({ email }).toArray();
+        res.send(cartItems);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to get cart items" });
+      }
+    });
 
-  try {
-    const result = await cartCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: updateDoc }
-    );
-    res.send(result);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Failed to update cart item" });
-  }
-});
+    app.patch("/cart/:id", async (req, res) => {
+      const id = req.params.id;
+      const { quantity, selected } = req.body; // optionally selected
+      const updateDoc = {};
+      if (quantity !== undefined) updateDoc.quantity = quantity;
+      if (selected !== undefined) updateDoc.selected = selected;
 
-app.delete("/cart/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const result = await cartCollection.deleteOne({ _id: new ObjectId(id) });
+      try {
+        const result = await cartCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateDoc }
+        );
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to update cart item" });
+      }
+    });
 
-    if (result.deletedCount === 0) {
-      return res.status(404).send({ message: "Cart item not found" });
-    }
+    app.delete("/cart/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await cartCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
 
-    res.send({ acknowledged: true, deletedCount: result.deletedCount });
-  } catch (error) {
-    console.error("Error deleting cart item:", error);
-    res.status(500).send({ message: "Failed to delete cart item" });
-  }
-});
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: "Cart item not found" });
+        }
 
+        res.send({ acknowledged: true, deletedCount: result.deletedCount });
+      } catch (error) {
+        console.error("Error deleting cart item:", error);
+        res.status(500).send({ message: "Failed to delete cart item" });
+      }
+    });
 
+    app.post("/orders", async (req, res) => {
+      try {
+        const order = req.body; // full order data
+        const result = await ordersCollection.insertOne(order);
+        res.send({ acknowledged: true, insertedId: result.insertedId });
+      } catch (error) {
+        console.error("Failed to place order:", error);
+        res.status(500).send({ message: "Failed to place order" });
+      }
+    });
 
+    // Get orders for a specific user
+    app.get("/orders", async (req, res) => {
+      try {
+        const email = req.query.email;
+        let query = {};
+
+        // If email query is provided, filter orders by email
+        if (email) {
+          query.email = email;
+        }
+
+        const orders = await ordersCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send(orders);
+      } catch (error) {
+        console.error("Failed to fetch orders:", error);
+        res.status(500).send({ message: "Failed to fetch orders" });
+      }
+    });
+
+    // Delete an order
+    app.delete("/orders/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await ordersCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    // Update order status
+    app.patch("/orders/:id/status", async (req, res) => {
+      try {
+        const { status } = req.body;
+        const id = req.params.id;
+
+        const result = await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: status } }
+        );
+
+        if (result.modifiedCount > 0) {
+          res.send({ success: true, message: "Status updated" });
+        } else {
+          res.status(404).send({ success: false, message: "Order not found" });
+        }
+      } catch (error) {
+        console.error("Failed to update status:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
+      }
+    });
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
