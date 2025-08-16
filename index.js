@@ -639,6 +639,66 @@ async function run() {
       }
     });
 
+  app.post("/apply-coupon", async (req, res) => {
+  try {
+    const codeRaw = req.body.code;
+    const totalAmount = Number(req.body.totalAmount) || 0;
+
+    if (!codeRaw) {
+      return res.status(400).send({ message: "Coupon code is required" });
+    }
+
+    // use exactly as stored
+    const code = codeRaw.trim();
+
+    const coupon = await couponsCollection.findOne({ code, status: "active" });
+    if (!coupon) {
+      return res.status(404).send({ message: "Invalid or inactive coupon" });
+    }
+
+    const now = new Date();
+
+    if (coupon.startDate && new Date(coupon.startDate) > now) {
+      return res.status(400).send({ message: "Coupon is not active yet" });
+    }
+
+    if (coupon.expiryDate && new Date(coupon.expiryDate) < now) {
+      return res.status(400).send({ message: "Coupon has expired" });
+    }
+
+    const minReq = Number(coupon.minOrderAmount) || 0;
+    if (minReq && totalAmount < minReq) {
+      return res
+        .status(400)
+        .send({ message: `Minimum order amount is ${minReq}` });
+    }
+
+    let discount = 0;
+    if (coupon.discountType === "percentage") {
+      discount = (totalAmount * Number(coupon.discountValue || 0)) / 100;
+    } else if (coupon.discountType === "fixed") {
+      discount = Number(coupon.discountValue || 0);
+    }
+
+    if (discount < 0) discount = 0;
+    if (discount > totalAmount) discount = totalAmount;
+
+    const finalAmount = Math.max(totalAmount - discount, 0);
+
+    return res.send({
+      success: true,
+      code: coupon.code,
+      discount: Math.round(discount),
+      finalAmount,
+      message: "Coupon applied successfully",
+    });
+  } catch (error) {
+    console.error("Failed to apply coupon:", error);
+    res.status(500).send({ message: "Failed to apply coupon" });
+  }
+});
+
+
     // await client.db("admin").command({ ping: 1 });
     // console.log(
     //   "Pinged your deployment. You successfully connected to MongoDB!"
