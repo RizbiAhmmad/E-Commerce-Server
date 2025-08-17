@@ -5,6 +5,13 @@ const port = process.env.PORT || 5000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 
+
+const SSLCommerzPayment = require('sslcommerz-lts');
+
+const store_id = 'bangl68a02f855f19d';
+const store_passwd = 'bangl68a02f855f19d@ssl';
+const is_live = false; // Sandbox mode
+
 app.use(cors());
 app.use(express.json());
 
@@ -18,6 +25,7 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
+
 
 async function run() {
   try {
@@ -696,6 +704,76 @@ async function run() {
     console.error("Failed to apply coupon:", error);
     res.status(500).send({ message: "Failed to apply coupon" });
   }
+});
+
+app.post("/sslcommerz/init", async (req, res) => {
+  try {
+    const { orderId, totalAmount, fullName, email, phone, address } = req.body;
+
+    const data = {
+      total_amount: totalAmount,
+      currency: "BDT",
+      tran_id: `tran_${Date.now()}`, // must be unique
+      success_url: "http://localhost:5000/sslcommerz/success",
+      fail_url: "http://localhost:5000/sslcommerz/fail",
+      cancel_url: "http://localhost:5000/sslcommerz/cancel",
+      ipn_url: "http://localhost:5000/sslcommerz/ipn",
+      shipping_method: "Courier",
+      product_name: "Order Payment",
+      product_category: "Ecommerce",
+      product_profile: "general",
+      order_id: orderId,
+
+      // Customer info
+      cus_name: fullName,
+      cus_email: email,
+      cus_add1: address,
+      cus_add2: address,
+      cus_city: "Dhaka",
+      cus_state: "Dhaka",
+      cus_postcode: "1000",
+      cus_country: "Bangladesh",
+      cus_phone: phone,
+      cus_fax: phone,
+
+      // Shipping info (must include!)
+      ship_name: fullName,
+      ship_add1: address,
+      ship_add2: address,
+      ship_city: "Dhaka",
+      ship_state: "Dhaka",
+      ship_postcode: 1000,
+      ship_country: "Bangladesh",
+    };
+
+    const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live);
+    const apiResponse = await sslcz.init(data);
+
+    if (apiResponse?.GatewayPageURL) {
+      res.json({ GatewayPageURL: apiResponse.GatewayPageURL });
+    } else {
+      res.status(400).json({ message: "Failed to get GatewayPageURL", apiResponse });
+    }
+  } catch (err) {
+    console.error("SSLCommerz Init Error:", err);
+    res.status(500).json({ message: "SSLCommerz init failed", error: err.message });
+  }
+});
+
+// Success/Fail/Cancel routes
+app.post("/sslcommerz/success", (req, res) => {
+  console.log("Payment Success:", req.body);
+  res.redirect("http://localhost:5173/payment-success");
+});
+
+app.post("/sslcommerz/fail", (req, res) => {
+  console.log("Payment Failed:", req.body);
+  res.redirect("http://localhost:5173/payment-fail");
+});
+
+app.post("/sslcommerz/cancel", (req, res) => {
+  console.log("Payment Cancelled:", req.body);
+  res.redirect("http://localhost:5173/payment-cancel");
 });
 
 
