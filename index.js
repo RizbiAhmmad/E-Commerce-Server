@@ -5,11 +5,10 @@ const port = process.env.PORT || 5000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 
+const SSLCommerzPayment = require("sslcommerz-lts");
 
-const SSLCommerzPayment = require('sslcommerz-lts');
-
-const store_id = 'bangl68a02f855f19d';
-const store_passwd = 'bangl68a02f855f19d@ssl';
+const store_id = "bangl68a02f855f19d";
+const store_passwd = "bangl68a02f855f19d@ssl";
 const is_live = false; // Sandbox mode
 
 app.use(cors());
@@ -25,7 +24,6 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
-
 
 async function run() {
   try {
@@ -103,6 +101,14 @@ async function run() {
     app.get("/categories", async (req, res) => {
       const result = await categoriesCollection.find().toArray();
       res.send(result);
+    });
+
+    // Get a single category by ID
+    app.get("/categories/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const category = await categoriesCollection.findOne(query);
+      res.send(category);
     });
 
     // Delete a category by ID
@@ -299,16 +305,31 @@ async function run() {
       }
     });
 
-    // Get all products
-    app.get("/products", async (req, res) => {
-      try {
-        const result = await productsCollection.find().toArray();
-        res.send(result);
-      } catch (error) {
-        console.error("Error fetching products:", error);
-        res.status(500).send({ message: "Failed to fetch products" });
-      }
-    });
+    // Get all products or filter by categoryId
+   app.get("/products", async (req, res) => {
+  try {
+    const { categoryId, subcategoryId, search } = req.query;
+
+    let query = {};
+
+    if (categoryId) {
+      query.categoryId = categoryId;
+    }
+    if (subcategoryId) {
+      query.subcategoryId = subcategoryId;
+    }
+    if (search) {
+      query.name = { $regex: search, $options: "i" };
+    }
+
+    const result = await productsCollection.find(query).toArray();
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching products:", error);
+    res.status(500).send({ message: "Failed to fetch products" });
+  }
+});
+
 
     // Update a product by ID
     app.put("/products/:id", async (req, res) => {
@@ -647,135 +668,144 @@ async function run() {
       }
     });
 
-  app.post("/apply-coupon", async (req, res) => {
-  try {
-    const codeRaw = req.body.code;
-    const totalAmount = Number(req.body.totalAmount) || 0;
+    app.post("/apply-coupon", async (req, res) => {
+      try {
+        const codeRaw = req.body.code;
+        const totalAmount = Number(req.body.totalAmount) || 0;
 
-    if (!codeRaw) {
-      return res.status(400).send({ message: "Coupon code is required" });
-    }
+        if (!codeRaw) {
+          return res.status(400).send({ message: "Coupon code is required" });
+        }
 
-    // use exactly as stored
-    const code = codeRaw.trim();
+        // use exactly as stored
+        const code = codeRaw.trim();
 
-    const coupon = await couponsCollection.findOne({ code, status: "active" });
-    if (!coupon) {
-      return res.status(404).send({ message: "Invalid or inactive coupon" });
-    }
+        const coupon = await couponsCollection.findOne({
+          code,
+          status: "active",
+        });
+        if (!coupon) {
+          return res
+            .status(404)
+            .send({ message: "Invalid or inactive coupon" });
+        }
 
-    const now = new Date();
+        const now = new Date();
 
-    if (coupon.startDate && new Date(coupon.startDate) > now) {
-      return res.status(400).send({ message: "Coupon is not active yet" });
-    }
+        if (coupon.startDate && new Date(coupon.startDate) > now) {
+          return res.status(400).send({ message: "Coupon is not active yet" });
+        }
 
-    if (coupon.expiryDate && new Date(coupon.expiryDate) < now) {
-      return res.status(400).send({ message: "Coupon has expired" });
-    }
+        if (coupon.expiryDate && new Date(coupon.expiryDate) < now) {
+          return res.status(400).send({ message: "Coupon has expired" });
+        }
 
-    const minReq = Number(coupon.minOrderAmount) || 0;
-    if (minReq && totalAmount < minReq) {
-      return res
-        .status(400)
-        .send({ message: `Minimum order amount is ${minReq}` });
-    }
+        const minReq = Number(coupon.minOrderAmount) || 0;
+        if (minReq && totalAmount < minReq) {
+          return res
+            .status(400)
+            .send({ message: `Minimum order amount is ${minReq}` });
+        }
 
-    let discount = 0;
-    if (coupon.discountType === "percentage") {
-      discount = (totalAmount * Number(coupon.discountValue || 0)) / 100;
-    } else if (coupon.discountType === "fixed") {
-      discount = Number(coupon.discountValue || 0);
-    }
+        let discount = 0;
+        if (coupon.discountType === "percentage") {
+          discount = (totalAmount * Number(coupon.discountValue || 0)) / 100;
+        } else if (coupon.discountType === "fixed") {
+          discount = Number(coupon.discountValue || 0);
+        }
 
-    if (discount < 0) discount = 0;
-    if (discount > totalAmount) discount = totalAmount;
+        if (discount < 0) discount = 0;
+        if (discount > totalAmount) discount = totalAmount;
 
-    const finalAmount = Math.max(totalAmount - discount, 0);
+        const finalAmount = Math.max(totalAmount - discount, 0);
 
-    return res.send({
-      success: true,
-      code: coupon.code,
-      discount: Math.round(discount),
-      finalAmount,
-      message: "Coupon applied successfully",
+        return res.send({
+          success: true,
+          code: coupon.code,
+          discount: Math.round(discount),
+          finalAmount,
+          message: "Coupon applied successfully",
+        });
+      } catch (error) {
+        console.error("Failed to apply coupon:", error);
+        res.status(500).send({ message: "Failed to apply coupon" });
+      }
     });
-  } catch (error) {
-    console.error("Failed to apply coupon:", error);
-    res.status(500).send({ message: "Failed to apply coupon" });
-  }
-});
 
-app.post("/sslcommerz/init", async (req, res) => {
-  try {
-    const { orderId, totalAmount, fullName, email, phone, address } = req.body;
+    app.post("/sslcommerz/init", async (req, res) => {
+      try {
+        const { orderId, totalAmount, fullName, email, phone, address } =
+          req.body;
 
-    const data = {
-      total_amount: totalAmount,
-      currency: "BDT",
-      tran_id: `tran_${Date.now()}`, // must be unique
-      success_url: "http://localhost:5000/sslcommerz/success",
-      fail_url: "http://localhost:5000/sslcommerz/fail",
-      cancel_url: "http://localhost:5000/sslcommerz/cancel",
-      ipn_url: "http://localhost:5000/sslcommerz/ipn",
-      shipping_method: "Courier",
-      product_name: "Order Payment",
-      product_category: "Ecommerce",
-      product_profile: "general",
-      order_id: orderId,
+        const data = {
+          total_amount: totalAmount,
+          currency: "BDT",
+          tran_id: `tran_${Date.now()}`, // must be unique
+          success_url: "http://localhost:5000/sslcommerz/success",
+          fail_url: "http://localhost:5000/sslcommerz/fail",
+          cancel_url: "http://localhost:5000/sslcommerz/cancel",
+          ipn_url: "http://localhost:5000/sslcommerz/ipn",
+          shipping_method: "Courier",
+          product_name: "Order Payment",
+          product_category: "Ecommerce",
+          product_profile: "general",
+          order_id: orderId,
 
-      // Customer info
-      cus_name: fullName,
-      cus_email: email,
-      cus_add1: address,
-      cus_add2: address,
-      cus_city: "Dhaka",
-      cus_state: "Dhaka",
-      cus_postcode: "1000",
-      cus_country: "Bangladesh",
-      cus_phone: phone,
-      cus_fax: phone,
+          // Customer info
+          cus_name: fullName,
+          cus_email: email,
+          cus_add1: address,
+          cus_add2: address,
+          cus_city: "Dhaka",
+          cus_state: "Dhaka",
+          cus_postcode: "1000",
+          cus_country: "Bangladesh",
+          cus_phone: phone,
+          cus_fax: phone,
 
-      // Shipping info (must include!)
-      ship_name: fullName,
-      ship_add1: address,
-      ship_add2: address,
-      ship_city: "Dhaka",
-      ship_state: "Dhaka",
-      ship_postcode: 1000,
-      ship_country: "Bangladesh",
-    };
+          // Shipping info (must include!)
+          ship_name: fullName,
+          ship_add1: address,
+          ship_add2: address,
+          ship_city: "Dhaka",
+          ship_state: "Dhaka",
+          ship_postcode: 1000,
+          ship_country: "Bangladesh",
+        };
 
-    const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live);
-    const apiResponse = await sslcz.init(data);
+        const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live);
+        const apiResponse = await sslcz.init(data);
 
-    if (apiResponse?.GatewayPageURL) {
-      res.json({ GatewayPageURL: apiResponse.GatewayPageURL });
-    } else {
-      res.status(400).json({ message: "Failed to get GatewayPageURL", apiResponse });
-    }
-  } catch (err) {
-    console.error("SSLCommerz Init Error:", err);
-    res.status(500).json({ message: "SSLCommerz init failed", error: err.message });
-  }
-});
+        if (apiResponse?.GatewayPageURL) {
+          res.json({ GatewayPageURL: apiResponse.GatewayPageURL });
+        } else {
+          res
+            .status(400)
+            .json({ message: "Failed to get GatewayPageURL", apiResponse });
+        }
+      } catch (err) {
+        console.error("SSLCommerz Init Error:", err);
+        res
+          .status(500)
+          .json({ message: "SSLCommerz init failed", error: err.message });
+      }
+    });
 
-// Success/Fail/Cancel routes
-app.post("/sslcommerz/success", (req, res) => {
-  console.log("Payment Success:", req.body);
-  res.redirect("http://localhost:5173/payment-success");
-});
+    // Success/Fail/Cancel routes
+    app.post("/sslcommerz/success", (req, res) => {
+      console.log("Payment Success:", req.body);
+      res.redirect("http://localhost:5173/payment-success");
+    });
 
-app.post("/sslcommerz/fail", (req, res) => {
-  console.log("Payment Failed:", req.body);
-  res.redirect("http://localhost:5173/payment-fail");
-});
+    app.post("/sslcommerz/fail", (req, res) => {
+      console.log("Payment Failed:", req.body);
+      res.redirect("http://localhost:5173/payment-fail");
+    });
 
-app.post("/sslcommerz/cancel", (req, res) => {
-  console.log("Payment Cancelled:", req.body);
-  res.redirect("http://localhost:5173/payment-cancel");
-});
-
+    app.post("/sslcommerz/cancel", (req, res) => {
+      console.log("Payment Cancelled:", req.body);
+      res.redirect("http://localhost:5173/payment-cancel");
+    });
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
