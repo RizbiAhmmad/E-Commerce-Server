@@ -43,6 +43,8 @@ async function run() {
     const cartCollection = database.collection("cart");
     const ordersCollection = database.collection("orders");
     const couponsCollection = database.collection("coupons");
+    const posCartCollection = database.collection("pos_cart");
+    const posOrdersCollection = database.collection("pos_orders");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -306,36 +308,35 @@ async function run() {
     });
 
     // Get all products or filter by categoryId
-   app.get("/products", async (req, res) => {
-  try {
-    const { categoryId, subcategoryId, search } = req.query;
+    app.get("/products", async (req, res) => {
+      try {
+        const { categoryId, subcategoryId, search } = req.query;
 
-    let query = {};
+        let query = {};
 
-    if (categoryId) {
-      query.categoryId = categoryId;
-    }
-    if (subcategoryId) {
-      query.subcategoryId = subcategoryId;
-    }
-    if (search) {
-      query.name = { $regex: search, $options: "i" };
-    }
+        if (categoryId) {
+          query.categoryId = categoryId;
+        }
+        if (subcategoryId) {
+          query.subcategoryId = subcategoryId;
+        }
+        if (search) {
+          query.name = { $regex: search, $options: "i" };
+        }
 
-    const result = await productsCollection.find(query).toArray();
-    res.send(result);
-  } catch (error) {
-    console.error("Error fetching products:", error);
-    res.status(500).send({ message: "Failed to fetch products" });
-  }
-});
-
+        const result = await productsCollection.find(query).toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching products:", error);
+        res.status(500).send({ message: "Failed to fetch products" });
+      }
+    });
 
     // Update a product by ID
     app.put("/products/:id", async (req, res) => {
       try {
         const id = req.params.id;
-        const updatedProduct = req.body; // full product object with updated images array etc.
+        const updatedProduct = req.body;
 
         // Validate id
         if (!ObjectId.isValid(id)) {
@@ -734,8 +735,15 @@ async function run() {
 
     app.post("/sslcommerz/init", async (req, res) => {
       try {
-        const { orderId, totalAmount, fullName, email, phone, address } =
-          req.body;
+        const {
+          orderId,
+          totalAmount,
+          fullName,
+          email,
+          phone,
+          address,
+          cartItems,
+        } = req.body;
 
         const data = {
           total_amount: totalAmount,
@@ -771,6 +779,7 @@ async function run() {
           ship_state: "Dhaka",
           ship_postcode: 1000,
           ship_country: "Bangladesh",
+          cartItems: JSON.stringify(cartItems),
         };
 
         const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live);
@@ -792,9 +801,60 @@ async function run() {
     });
 
     // Success/Fail/Cancel routes
-    app.post("/sslcommerz/success", (req, res) => {
-      console.log("Payment Success:", req.body);
-      res.redirect("http://localhost:5173/payment-success");
+    app.all("/sslcommerz/success", async (req, res) => {
+      try {
+        // SSLCommerz might send data in req.body or req.query
+        const paymentData = req.body || req.query || {};
+
+        console.log("Payment Success:", paymentData);
+
+        // Safely destructure
+        const {
+          tran_id,
+          status,
+          firstname,
+          email,
+          phone,
+          cus_add1,
+          cartItems,
+          amount,
+        } = paymentData;
+
+        if (!tran_id) {
+          return res
+            .status(400)
+            .send("Transaction ID missing from payment data");
+        }
+
+        // Prepare order data
+        const orderData = {
+          fullName: firstname || "Customer",
+          email: email || "no-email@example.com",
+          phone: phone || "N/A",
+          address: cus_add1 || "N/A",
+          payment: "online",
+          tran_id,
+          status:
+            status === "VALID" || status === "VALIDATED" ? "paid" : "failed",
+          cartItems: cartItems ? JSON.parse(cartItems) : [],
+          subtotal: amount || 0,
+          shippingCost: 0, // optional
+          discount: 0, // optional
+          total: amount || 0,
+          createdAt: new Date(),
+        };
+
+        // Save to DB
+        await ordersCollection.insertOne(orderData);
+
+        // Redirect to frontend success page
+        res.redirect(
+          `http://localhost:5173/payment-success?tran_id=${tran_id}`
+        );
+      } catch (err) {
+        console.error("Payment Success Error:", err);
+        res.status(500).send("Failed to process payment");
+      }
     });
 
     app.post("/sslcommerz/fail", (req, res) => {
@@ -805,6 +865,91 @@ async function run() {
     app.post("/sslcommerz/cancel", (req, res) => {
       console.log("Payment Cancelled:", req.body);
       res.redirect("http://localhost:5173/payment-cancel");
+    });
+
+    // Add item to POS cart
+    app.post("/pos/cart", async (req, res) => {
+      try {
+        const cartItem = req.body; // productId, quantity, price, etc.
+        const result = await posCartCollection.insertOne(cartItem);
+        res.send({ success: true, insertedId: result.insertedId });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to add to POS cart" });
+      }
+    });
+
+    // Get all POS cart items
+    app.get("/pos/cart", async (req, res) => {
+      try {
+        const cartItems = await posCartCollection.find().toArray();
+        res.send(cartItems);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to fetch POS cart" });
+      }
+    });
+
+    // Update quantity
+    app.patch("/pos/cart/:id", async (req, res) => {
+      const { quantity } = req.body;
+      try {
+        const result = await posCartCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { quantity } }
+        );
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to update POS cart item" });
+      }
+    });
+
+    // Delete item from POS cart
+    app.delete("/pos/cart/:id", async (req, res) => {
+      try {
+        const result = await posCartCollection.deleteOne({
+          _id: new ObjectId(req.params.id),
+        });
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to delete POS cart item" });
+      }
+    });
+
+    // Place POS order
+    app.post("/pos/orders", async (req, res) => {
+      try {
+        const order = req.body;
+        order.orderType = "pos";
+        order.status = "paid";
+        order.createdAt = new Date();
+
+        const result = await posOrdersCollection.insertOne(order);
+
+        // Clear POS cart after order
+        await posCartCollection.deleteMany({});
+
+        res.send({ success: true, insertedId: result.insertedId });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to save POS order" });
+      }
+    });
+
+    // Get all POS orders
+    app.get("/pos/orders", async (req, res) => {
+      try {
+        const orders = await posOrdersCollection
+          .find()
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send(orders);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to fetch POS orders" });
+      }
     });
 
     // await client.db("admin").command({ ping: 1 });
