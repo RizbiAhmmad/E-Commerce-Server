@@ -177,9 +177,9 @@ async function run() {
       res.send(result);
     });
 
-    // --- Create brand
+    // Create brand
     app.post("/brands", async (req, res) => {
-      const brand = req.body; // { name, logo, status, createdByEmail }
+      const brand = req.body; 
       const exists = await brandsCollection.findOne({ name: brand.name });
       if (exists)
         return res.send({
@@ -200,7 +200,7 @@ async function run() {
     // --- Update brand
     app.put("/brands/:id", async (req, res) => {
       const id = req.params.id;
-      const data = req.body; // { name, logo, status }
+      const data = req.body; 
       const result = await brandsCollection.updateOne(
         { _id: new ObjectId(id) },
         { $set: { name: data.name, logo: data.logo, status: data.status } }
@@ -254,7 +254,7 @@ async function run() {
 
     // Add a new color
     app.post("/colors", async (req, res) => {
-      const color = req.body; // expects: { name, hex, status }
+      const color = req.body; 
       const existing = await colorsCollection.findOne({ name: color.name });
       if (existing) {
         return res.send({ message: "Color already exists", insertedId: null });
@@ -281,7 +281,7 @@ async function run() {
     // Update a color
     app.put("/colors/:id", async (req, res) => {
       const id = req.params.id;
-      const data = req.body; // expects: { name, hex, status }
+      const data = req.body; 
       const result = await colorsCollection.updateOne(
         { _id: new ObjectId(id) },
         {
@@ -298,7 +298,7 @@ async function run() {
     // Add a new product
     app.post("/products", async (req, res) => {
       try {
-        const product = req.body; // includes image URL, user email, etc.
+        const product = req.body;
         const result = await productsCollection.insertOne(product);
         res.send(result);
       } catch (error) {
@@ -355,13 +355,13 @@ async function run() {
             brandId: updatedProduct.brandId,
             sizes: updatedProduct.sizes,
             colors: updatedProduct.colors,
-            purchasePrice: updatedProduct.purchasePrice,
-            oldPrice: updatedProduct.oldPrice,
-            newPrice: updatedProduct.newPrice,
-            stock: updatedProduct.stock,
+            purchasePrice: Number(updatedProduct.purchasePrice),
+            oldPrice: Number(updatedProduct.oldPrice),
+            newPrice: Number(updatedProduct.newPrice),
+            stock: Number(updatedProduct.stock),
             status: updatedProduct.status,
             variant: updatedProduct.variant,
-            images: updatedProduct.images, // updated array of image URLs
+            images: updatedProduct.images,
             email: updatedProduct.email,
           },
         };
@@ -536,7 +536,7 @@ async function run() {
 
     app.post("/orders", async (req, res) => {
       try {
-        const order = req.body; // full order data
+        const order = req.body;
         const result = await ordersCollection.insertOne(order);
         res.send({ acknowledged: true, insertedId: result.insertedId });
       } catch (error) {
@@ -577,29 +577,42 @@ async function run() {
       res.send(result);
     });
 
+   // Update order status & adjust stock
+app.patch("/orders/:id/status", async (req, res) => {
+  try {
+    const { status } = req.body;
+    const id = req.params.id;
+
+    // Find order by id
+    const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+    if (!order) {
+      return res.status(404).send({ success: false, message: "Order not found" });
+    }
+
     // Update order status
-    app.patch("/orders/:id/status", async (req, res) => {
-      try {
-        const { status } = req.body;
-        const id = req.params.id;
+    const result = await ordersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: status } }
+    );
 
-        const result = await ordersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { status: status } }
+    // If status is delivered, reduce stock
+    if (status === "delivered" && order.cartItems) {
+      for (const item of order.cartItems) {
+        await productsCollection.updateOne(
+          { _id: new ObjectId(item.productId) },
+          { $inc: { stock: -Number(item.quantity) } }
         );
-
-        if (result.modifiedCount > 0) {
-          res.send({ success: true, message: "Status updated" });
-        } else {
-          res.status(404).send({ success: false, message: "Order not found" });
-        }
-      } catch (error) {
-        console.error("Failed to update status:", error);
-        res
-          .status(500)
-          .send({ success: false, message: "Internal Server Error" });
       }
-    });
+    }
+
+    res.send({ success: true, message: "Status updated & stock adjusted if delivered" });
+  } catch (error) {
+    console.error("Failed to update status:", error);
+    res.status(500).send({ success: false, message: "Internal Server Error" });
+  }
+});
+
+
 
     app.post("/coupons", async (req, res) => {
       try {
@@ -926,9 +939,18 @@ async function run() {
         order.status = "paid";
         order.createdAt = new Date();
 
+        // 1. Save order
         const result = await posOrdersCollection.insertOne(order);
 
-        // Clear POS cart after order
+        // 2. Update stock for each product
+        for (const item of order.cartItems) {
+          await productsCollection.updateOne(
+            { _id: new ObjectId(item.productId) },
+            { $inc: { stock: -Number(item.quantity) } }
+          );
+        }
+
+        // 3. Clear POS cart
         await posCartCollection.deleteMany({});
 
         res.send({ success: true, insertedId: result.insertedId });
@@ -949,6 +971,19 @@ async function run() {
       } catch (error) {
         console.error(error);
         res.status(500).send({ message: "Failed to fetch POS orders" });
+      }
+    });
+
+    app.delete("/pos/orders/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await posOrdersCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting order:", error);
+        res.status(500).send({ message: "Failed to delete order" });
       }
     });
 
