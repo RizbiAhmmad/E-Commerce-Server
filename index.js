@@ -537,6 +537,7 @@ async function run() {
     app.post("/orders", async (req, res) => {
       try {
         const order = req.body;
+        order.createdAt = new Date();
         const result = await ordersCollection.insertOne(order);
         res.send({ acknowledged: true, insertedId: result.insertedId });
       } catch (error) {
@@ -986,6 +987,59 @@ app.patch("/orders/:id/status", async (req, res) => {
         res.status(500).send({ message: "Failed to delete order" });
       }
     });
+
+  app.get("/sales-report", async (req, res) => {
+  try {
+    const deliveredOrders = await ordersCollection
+      .find({ status: "delivered" })
+      .toArray();
+
+    const posOrders = await posOrdersCollection.find().toArray();
+
+    const allOrders = [...deliveredOrders, ...posOrders];
+
+    // filter by date
+    const filterByDate = (orders, period) => {
+      const now = new Date();
+      return orders.filter((order) => {
+        const orderDate = new Date(order.createdAt);
+        if (period === "today") {
+          return (
+            orderDate.toDateString() === now.toDateString()
+          );
+        } else if (period === "week") {
+          const weekAgo = new Date();
+          weekAgo.setDate(now.getDate() - 7);
+          return orderDate >= weekAgo;
+        } else if (period === "month") {
+          return (
+            orderDate.getMonth() === now.getMonth() &&
+            orderDate.getFullYear() === now.getFullYear()
+          );
+        }
+        return true;
+      });
+    };
+
+    // Total calculations
+    const calcTotal = (orders) =>
+      orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+
+    res.send({
+      allTime: calcTotal(allOrders),
+      thisMonth: calcTotal(filterByDate(allOrders, "month")),
+      thisWeek: calcTotal(filterByDate(allOrders, "week")),
+      today: calcTotal(filterByDate(allOrders, "today")),
+      allOrders,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Failed to generate sales report" });
+  }
+});
+
+
+
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
