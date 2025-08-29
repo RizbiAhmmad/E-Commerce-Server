@@ -7,8 +7,8 @@ require("dotenv").config();
 
 const SSLCommerzPayment = require("sslcommerz-lts");
 
-const store_id = "bangl68a02f855f19d";
-const store_passwd = "bangl68a02f855f19d@ssl";
+const store_id = process.env.SSL_ID;
+const store_passwd = process.env.SSL_PASS;
 const is_live = false; // Sandbox mode
 
 app.use(cors());
@@ -45,6 +45,8 @@ async function run() {
     const couponsCollection = database.collection("coupons");
     const posCartCollection = database.collection("pos_cart");
     const posOrdersCollection = database.collection("pos_orders");
+    const expenseCategoriesCollection =
+      database.collection("expense_categories");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -179,7 +181,7 @@ async function run() {
 
     // Create brand
     app.post("/brands", async (req, res) => {
-      const brand = req.body; 
+      const brand = req.body;
       const exists = await brandsCollection.findOne({ name: brand.name });
       if (exists)
         return res.send({
@@ -200,7 +202,7 @@ async function run() {
     // --- Update brand
     app.put("/brands/:id", async (req, res) => {
       const id = req.params.id;
-      const data = req.body; 
+      const data = req.body;
       const result = await brandsCollection.updateOne(
         { _id: new ObjectId(id) },
         { $set: { name: data.name, logo: data.logo, status: data.status } }
@@ -254,7 +256,7 @@ async function run() {
 
     // Add a new color
     app.post("/colors", async (req, res) => {
-      const color = req.body; 
+      const color = req.body;
       const existing = await colorsCollection.findOne({ name: color.name });
       if (existing) {
         return res.send({ message: "Color already exists", insertedId: null });
@@ -281,7 +283,7 @@ async function run() {
     // Update a color
     app.put("/colors/:id", async (req, res) => {
       const id = req.params.id;
-      const data = req.body; 
+      const data = req.body;
       const result = await colorsCollection.updateOne(
         { _id: new ObjectId(id) },
         {
@@ -578,42 +580,47 @@ async function run() {
       res.send(result);
     });
 
-   // Update order status & adjust stock
-app.patch("/orders/:id/status", async (req, res) => {
-  try {
-    const { status } = req.body;
-    const id = req.params.id;
+    // Update order status & adjust stock
+    app.patch("/orders/:id/status", async (req, res) => {
+      try {
+        const { status } = req.body;
+        const id = req.params.id;
 
-    // Find order by id
-    const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
-    if (!order) {
-      return res.status(404).send({ success: false, message: "Order not found" });
-    }
+        // Find order by id
+        const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+        if (!order) {
+          return res
+            .status(404)
+            .send({ success: false, message: "Order not found" });
+        }
 
-    // Update order status
-    const result = await ordersCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { status: status } }
-    );
-
-    // If status is delivered, reduce stock
-    if (status === "delivered" && order.cartItems) {
-      for (const item of order.cartItems) {
-        await productsCollection.updateOne(
-          { _id: new ObjectId(item.productId) },
-          { $inc: { stock: -Number(item.quantity) } }
+        // Update order status
+        const result = await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: status } }
         );
+
+        // If status is delivered, reduce stock
+        if (status === "delivered" && order.cartItems) {
+          for (const item of order.cartItems) {
+            await productsCollection.updateOne(
+              { _id: new ObjectId(item.productId) },
+              { $inc: { stock: -Number(item.quantity) } }
+            );
+          }
+        }
+
+        res.send({
+          success: true,
+          message: "Status updated & stock adjusted if delivered",
+        });
+      } catch (error) {
+        console.error("Failed to update status:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
       }
-    }
-
-    res.send({ success: true, message: "Status updated & stock adjusted if delivered" });
-  } catch (error) {
-    console.error("Failed to update status:", error);
-    res.status(500).send({ success: false, message: "Internal Server Error" });
-  }
-});
-
-
+    });
 
     app.post("/coupons", async (req, res) => {
       try {
@@ -988,58 +995,115 @@ app.patch("/orders/:id/status", async (req, res) => {
       }
     });
 
-  app.get("/sales-report", async (req, res) => {
-  try {
-    const deliveredOrders = await ordersCollection
-      .find({ status: "delivered" })
-      .toArray();
+    app.get("/sales-report", async (req, res) => {
+      try {
+        const deliveredOrders = await ordersCollection
+          .find({ status: "delivered" })
+          .toArray();
 
-    const posOrders = await posOrdersCollection.find().toArray();
+        const posOrders = await posOrdersCollection.find().toArray();
 
-    const allOrders = [...deliveredOrders, ...posOrders];
+        const allOrders = [...deliveredOrders, ...posOrders];
 
-    // filter by date
-    const filterByDate = (orders, period) => {
-      const now = new Date();
-      return orders.filter((order) => {
-        const orderDate = new Date(order.createdAt);
-        if (period === "today") {
-          return (
-            orderDate.toDateString() === now.toDateString()
-          );
-        } else if (period === "week") {
-          const weekAgo = new Date();
-          weekAgo.setDate(now.getDate() - 7);
-          return orderDate >= weekAgo;
-        } else if (period === "month") {
-          return (
-            orderDate.getMonth() === now.getMonth() &&
-            orderDate.getFullYear() === now.getFullYear()
-          );
-        }
-        return true;
-      });
-    };
+        // filter by date
+        const filterByDate = (orders, period) => {
+          const now = new Date();
+          return orders.filter((order) => {
+            const orderDate = new Date(order.createdAt);
+            if (period === "today") {
+              return orderDate.toDateString() === now.toDateString();
+            } else if (period === "week") {
+              const weekAgo = new Date();
+              weekAgo.setDate(now.getDate() - 7);
+              return orderDate >= weekAgo;
+            } else if (period === "month") {
+              return (
+                orderDate.getMonth() === now.getMonth() &&
+                orderDate.getFullYear() === now.getFullYear()
+              );
+            }
+            return true;
+          });
+        };
 
-    // Total calculations
-    const calcTotal = (orders) =>
-      orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+        // Total calculations
+        const calcTotal = (orders) =>
+          orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
 
-    res.send({
-      allTime: calcTotal(allOrders),
-      thisMonth: calcTotal(filterByDate(allOrders, "month")),
-      thisWeek: calcTotal(filterByDate(allOrders, "week")),
-      today: calcTotal(filterByDate(allOrders, "today")),
-      allOrders,
+        res.send({
+          allTime: calcTotal(allOrders),
+          thisMonth: calcTotal(filterByDate(allOrders, "month")),
+          thisWeek: calcTotal(filterByDate(allOrders, "week")),
+          today: calcTotal(filterByDate(allOrders, "today")),
+          allOrders,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to generate sales report" });
+      }
     });
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Failed to generate sales report" });
-  }
-});
 
+    // Add Expense Category
+    app.post("/expense-categories", async (req, res) => {
+      const expenseCategory = req.body;
+      const result = await expenseCategoriesCollection.insertOne(
+        expenseCategory
+      );
+      res.send(result);
+    });
 
+    // Get Expense Categories
+    app.get("/expense-categories", async (req, res) => {
+      const result = await expenseCategoriesCollection.find().toArray();
+      res.send(result);
+    });
 
+    // Delete Expense Category
+    app.delete("/expense-categories/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await expenseCategoriesCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    // Update Expense Category
+    app.put("/expense-categories/:id", async (req, res) => {
+      const id = req.params.id;
+      const updatedData = req.body;
+
+      try {
+        const result = await expenseCategoriesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              name: updatedData.name,
+              status: updatedData.status,
+            },
+          }
+        );
+
+        if (result.modifiedCount > 0) {
+          res.send({
+            success: true,
+            message: "Expense category updated successfully",
+          });
+        } else {
+          res.send({
+            success: false,
+            message: "No changes made or category not found",
+          });
+        }
+      } catch (error) {
+        console.error("Error updating expense category:", error);
+        res
+          .status(500)
+          .send({
+            success: false,
+            message: "Failed to update expense category",
+          });
+      }
+    });
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
