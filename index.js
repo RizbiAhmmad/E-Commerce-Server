@@ -996,52 +996,74 @@ async function run() {
     });
 
     app.get("/sales-report", async (req, res) => {
-      try {
-        const deliveredOrders = await ordersCollection
-          .find({ status: "delivered" })
-          .toArray();
+  try {
+    const deliveredOrders = await ordersCollection
+      .find({ status: "delivered" })
+      .toArray();
 
-        const posOrders = await posOrdersCollection.find().toArray();
+    const posOrders = await posOrdersCollection.find().toArray();
 
-        const allOrders = [...deliveredOrders, ...posOrders];
+    const allOrders = [...deliveredOrders, ...posOrders];
+    const now = new Date();
 
-        // filter by date
-        const filterByDate = (orders, period) => {
-          const now = new Date();
-          return orders.filter((order) => {
-            const orderDate = new Date(order.createdAt);
-            if (period === "today") {
-              return orderDate.toDateString() === now.toDateString();
-            } else if (period === "week") {
-              const weekAgo = new Date();
-              weekAgo.setDate(now.getDate() - 7);
-              return orderDate >= weekAgo;
-            } else if (period === "month") {
-              return (
-                orderDate.getMonth() === now.getMonth() &&
-                orderDate.getFullYear() === now.getFullYear()
-              );
-            }
-            return true;
-          });
-        };
+    // helper function
+    const calcTotal = (orders) =>
+      orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
 
-        // Total calculations
-        const calcTotal = (orders) =>
-          orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+    // date filters
+    const filterByDate = (orders, period) => {
+      const now = new Date();
+      return orders.filter((order) => {
+        const orderDate = new Date(order.createdAt);
+        if (period === "today") {
+          return orderDate.toDateString() === now.toDateString();
+        } else if (period === "yesterday") {
+          const yest = new Date(now);
+          yest.setDate(now.getDate() - 1);
+          return orderDate.toDateString() === yest.toDateString();
+        } else if (period === "week") {
+          const weekAgo = new Date();
+          weekAgo.setDate(now.getDate() - 7);
+          return orderDate >= weekAgo;
+        } else if (period === "lastWeek") {
+          const prevWeekStart = new Date();
+          prevWeekStart.setDate(now.getDate() - 14);
+          const prevWeekEnd = new Date();
+          prevWeekEnd.setDate(now.getDate() - 7);
+          return orderDate >= prevWeekStart && orderDate < prevWeekEnd;
+        } else if (period === "month") {
+          return (
+            orderDate.getMonth() === now.getMonth() &&
+            orderDate.getFullYear() === now.getFullYear()
+          );
+        } else if (period === "lastMonth") {
+          const month = now.getMonth() - 1;
+          const year = now.getFullYear();
+          return (
+            orderDate.getMonth() === month &&
+            orderDate.getFullYear() === year
+          );
+        }
+        return true;
+      });
+    };
 
-        res.send({
-          allTime: calcTotal(allOrders),
-          thisMonth: calcTotal(filterByDate(allOrders, "month")),
-          thisWeek: calcTotal(filterByDate(allOrders, "week")),
-          today: calcTotal(filterByDate(allOrders, "today")),
-          allOrders,
-        });
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ message: "Failed to generate sales report" });
-      }
+    res.send({
+      allTime: calcTotal(allOrders),
+      thisMonth: calcTotal(filterByDate(allOrders, "month")),
+      lastMonth: calcTotal(filterByDate(allOrders, "lastMonth")),
+      thisWeek: calcTotal(filterByDate(allOrders, "week")),
+      lastWeek: calcTotal(filterByDate(allOrders, "lastWeek")),
+      today: calcTotal(filterByDate(allOrders, "today")),
+      yesterday: calcTotal(filterByDate(allOrders, "yesterday")),
+      allOrders,
     });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Failed to generate sales report" });
+  }
+});
+
 
     // Add Expense Category
     app.post("/expense-categories", async (req, res) => {
@@ -1153,6 +1175,78 @@ app.delete("/expenses/:id", async (req, res) => {
     res.status(500).send({ message: "Failed to delete expense" });
   }
 });
+
+
+app.get("/expenses/report", async (req, res) => {
+  try {
+    const expenses = await expensesCollection.find().toArray();
+    const now = new Date();
+
+    const total = expenses.reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+    // Today & Yesterday
+    const today = expenses
+      .filter((e) => new Date(e.date).toDateString() === now.toDateString())
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+    const yesterdayDate = new Date(now);
+    yesterdayDate.setDate(now.getDate() - 1);
+    const yesterday = expenses
+      .filter(
+        (e) => new Date(e.date).toDateString() === yesterdayDate.toDateString()
+      )
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+    // This Week & Previous Week
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - 7);
+    const thisWeek = expenses
+      .filter((e) => new Date(e.date) >= weekStart)
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+    const prevWeekStart = new Date(now);
+    prevWeekStart.setDate(now.getDate() - 14);
+    const prevWeekEnd = new Date(now);
+    prevWeekEnd.setDate(now.getDate() - 7);
+    const previousWeek = expenses
+      .filter(
+        (e) =>
+          new Date(e.date) >= prevWeekStart && new Date(e.date) < prevWeekEnd
+      )
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+    // This Month & Previous Month
+    const thisMonth = expenses
+      .filter(
+        (e) =>
+          new Date(e.date).getMonth() === now.getMonth() &&
+          new Date(e.date).getFullYear() === now.getFullYear()
+      )
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+    const previousMonth = expenses
+      .filter(
+        (e) =>
+          new Date(e.date).getMonth() === now.getMonth() - 1 &&
+          new Date(e.date).getFullYear() === now.getFullYear()
+      )
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+    res.send({
+      total,
+      today,
+      yesterday,
+      thisWeek,
+      previousWeek,   // name changed ✅
+      thisMonth,
+      previousMonth,  // name changed ✅
+    });
+  } catch (error) {
+    res.status(500).send({ message: "Failed to generate report" });
+  }
+});
+
+
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
