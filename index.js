@@ -45,8 +45,8 @@ async function run() {
     const couponsCollection = database.collection("coupons");
     const posCartCollection = database.collection("pos_cart");
     const posOrdersCollection = database.collection("pos_orders");
-    const expenseCategoriesCollection =
-      database.collection("expense_categories");
+    const expenseCategoriesCollection = database.collection("expense_categories");
+    const expensesCollection = database.collection("expenses");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -1096,14 +1096,63 @@ async function run() {
         }
       } catch (error) {
         console.error("Error updating expense category:", error);
-        res
-          .status(500)
-          .send({
-            success: false,
-            message: "Failed to update expense category",
-          });
+        res.status(500).send({
+          success: false,
+          message: "Failed to update expense category",
+        });
       }
     });
+
+    // Add Expense
+app.post("/expenses", async (req, res) => {
+  const expense = req.body;
+  try {
+    const result = await expensesCollection.insertOne(expense);
+    res.send(result);
+  } catch (error) {
+    console.error("Error adding expense:", error);
+    res.status(500).send({ message: "Failed to add expense" });
+  }
+});
+
+// Get All Expenses
+app.get("/expenses", async (req, res) => {
+  try {
+    const result = await expensesCollection.find().toArray();
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching expenses:", error);
+    res.status(500).send({ message: "Failed to fetch expenses" });
+  }
+});
+
+// Update Expense
+app.put("/expenses/:id", async (req, res) => {
+  const id = req.params.id;
+  const updatedExpense = req.body;
+  try {
+    const result = await expensesCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedExpense }
+    );
+    res.send(result);
+  } catch (error) {
+    console.error("Error updating expense:", error);
+    res.status(500).send({ message: "Failed to update expense" });
+  }
+});
+
+// Delete Expense
+app.delete("/expenses/:id", async (req, res) => {
+  const id = req.params.id;
+  try {
+    const result = await expensesCollection.deleteOne({ _id: new ObjectId(id) });
+    res.send(result);
+  } catch (error) {
+    console.error("Error deleting expense:", error);
+    res.status(500).send({ message: "Failed to delete expense" });
+  }
+});
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
