@@ -45,7 +45,8 @@ async function run() {
     const couponsCollection = database.collection("coupons");
     const posCartCollection = database.collection("pos_cart");
     const posOrdersCollection = database.collection("pos_orders");
-    const expenseCategoriesCollection = database.collection("expense_categories");
+    const expenseCategoriesCollection =
+      database.collection("expense_categories");
     const expensesCollection = database.collection("expenses");
 
     // POST endpoint to save user data (with role)
@@ -996,74 +997,73 @@ async function run() {
     });
 
     app.get("/sales-report", async (req, res) => {
-  try {
-    const deliveredOrders = await ordersCollection
-      .find({ status: "delivered" })
-      .toArray();
+      try {
+        const deliveredOrders = await ordersCollection
+          .find({ status: "delivered" })
+          .toArray();
 
-    const posOrders = await posOrdersCollection.find().toArray();
+        const posOrders = await posOrdersCollection.find().toArray();
 
-    const allOrders = [...deliveredOrders, ...posOrders];
-    const now = new Date();
+        const allOrders = [...deliveredOrders, ...posOrders];
+        const now = new Date();
 
-    // helper function
-    const calcTotal = (orders) =>
-      orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+        // helper function
+        const calcTotal = (orders) =>
+          orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
 
-    // date filters
-    const filterByDate = (orders, period) => {
-      const now = new Date();
-      return orders.filter((order) => {
-        const orderDate = new Date(order.createdAt);
-        if (period === "today") {
-          return orderDate.toDateString() === now.toDateString();
-        } else if (period === "yesterday") {
-          const yest = new Date(now);
-          yest.setDate(now.getDate() - 1);
-          return orderDate.toDateString() === yest.toDateString();
-        } else if (period === "week") {
-          const weekAgo = new Date();
-          weekAgo.setDate(now.getDate() - 7);
-          return orderDate >= weekAgo;
-        } else if (period === "lastWeek") {
-          const prevWeekStart = new Date();
-          prevWeekStart.setDate(now.getDate() - 14);
-          const prevWeekEnd = new Date();
-          prevWeekEnd.setDate(now.getDate() - 7);
-          return orderDate >= prevWeekStart && orderDate < prevWeekEnd;
-        } else if (period === "month") {
-          return (
-            orderDate.getMonth() === now.getMonth() &&
-            orderDate.getFullYear() === now.getFullYear()
-          );
-        } else if (period === "lastMonth") {
-          const month = now.getMonth() - 1;
-          const year = now.getFullYear();
-          return (
-            orderDate.getMonth() === month &&
-            orderDate.getFullYear() === year
-          );
-        }
-        return true;
-      });
-    };
+        // date filters
+        const filterByDate = (orders, period) => {
+          const now = new Date();
+          return orders.filter((order) => {
+            const orderDate = new Date(order.createdAt);
+            if (period === "today") {
+              return orderDate.toDateString() === now.toDateString();
+            } else if (period === "yesterday") {
+              const yest = new Date(now);
+              yest.setDate(now.getDate() - 1);
+              return orderDate.toDateString() === yest.toDateString();
+            } else if (period === "week") {
+              const weekAgo = new Date();
+              weekAgo.setDate(now.getDate() - 7);
+              return orderDate >= weekAgo;
+            } else if (period === "lastWeek") {
+              const prevWeekStart = new Date();
+              prevWeekStart.setDate(now.getDate() - 14);
+              const prevWeekEnd = new Date();
+              prevWeekEnd.setDate(now.getDate() - 7);
+              return orderDate >= prevWeekStart && orderDate < prevWeekEnd;
+            } else if (period === "month") {
+              return (
+                orderDate.getMonth() === now.getMonth() &&
+                orderDate.getFullYear() === now.getFullYear()
+              );
+            } else if (period === "lastMonth") {
+              const month = now.getMonth() - 1;
+              const year = now.getFullYear();
+              return (
+                orderDate.getMonth() === month &&
+                orderDate.getFullYear() === year
+              );
+            }
+            return true;
+          });
+        };
 
-    res.send({
-      allTime: calcTotal(allOrders),
-      thisMonth: calcTotal(filterByDate(allOrders, "month")),
-      lastMonth: calcTotal(filterByDate(allOrders, "lastMonth")),
-      thisWeek: calcTotal(filterByDate(allOrders, "week")),
-      lastWeek: calcTotal(filterByDate(allOrders, "lastWeek")),
-      today: calcTotal(filterByDate(allOrders, "today")),
-      yesterday: calcTotal(filterByDate(allOrders, "yesterday")),
-      allOrders,
+        res.send({
+          allTime: calcTotal(allOrders),
+          thisMonth: calcTotal(filterByDate(allOrders, "month")),
+          lastMonth: calcTotal(filterByDate(allOrders, "lastMonth")),
+          thisWeek: calcTotal(filterByDate(allOrders, "week")),
+          lastWeek: calcTotal(filterByDate(allOrders, "lastWeek")),
+          today: calcTotal(filterByDate(allOrders, "today")),
+          yesterday: calcTotal(filterByDate(allOrders, "yesterday")),
+          allOrders,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to generate sales report" });
+      }
     });
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Failed to generate sales report" });
-  }
-});
-
 
     // Add Expense Category
     app.post("/expense-categories", async (req, res) => {
@@ -1126,127 +1126,173 @@ async function run() {
     });
 
     // Add Expense
-app.post("/expenses", async (req, res) => {
-  const expense = req.body;
-  try {
-    const result = await expensesCollection.insertOne(expense);
-    res.send(result);
-  } catch (error) {
-    console.error("Error adding expense:", error);
-    res.status(500).send({ message: "Failed to add expense" });
-  }
-});
-
-// Get All Expenses
-app.get("/expenses", async (req, res) => {
-  try {
-    const result = await expensesCollection.find().toArray();
-    res.send(result);
-  } catch (error) {
-    console.error("Error fetching expenses:", error);
-    res.status(500).send({ message: "Failed to fetch expenses" });
-  }
-});
-
-// Update Expense
-app.put("/expenses/:id", async (req, res) => {
-  const id = req.params.id;
-  const updatedExpense = req.body;
-  try {
-    const result = await expensesCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: updatedExpense }
-    );
-    res.send(result);
-  } catch (error) {
-    console.error("Error updating expense:", error);
-    res.status(500).send({ message: "Failed to update expense" });
-  }
-});
-
-// Delete Expense
-app.delete("/expenses/:id", async (req, res) => {
-  const id = req.params.id;
-  try {
-    const result = await expensesCollection.deleteOne({ _id: new ObjectId(id) });
-    res.send(result);
-  } catch (error) {
-    console.error("Error deleting expense:", error);
-    res.status(500).send({ message: "Failed to delete expense" });
-  }
-});
-
-
-app.get("/expenses/report", async (req, res) => {
-  try {
-    const expenses = await expensesCollection.find().toArray();
-    const now = new Date();
-
-    const total = expenses.reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    // Today & Yesterday
-    const today = expenses
-      .filter((e) => new Date(e.date).toDateString() === now.toDateString())
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    const yesterdayDate = new Date(now);
-    yesterdayDate.setDate(now.getDate() - 1);
-    const yesterday = expenses
-      .filter(
-        (e) => new Date(e.date).toDateString() === yesterdayDate.toDateString()
-      )
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    // This Week & Previous Week
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - 7);
-    const thisWeek = expenses
-      .filter((e) => new Date(e.date) >= weekStart)
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    const prevWeekStart = new Date(now);
-    prevWeekStart.setDate(now.getDate() - 14);
-    const prevWeekEnd = new Date(now);
-    prevWeekEnd.setDate(now.getDate() - 7);
-    const previousWeek = expenses
-      .filter(
-        (e) =>
-          new Date(e.date) >= prevWeekStart && new Date(e.date) < prevWeekEnd
-      )
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    // This Month & Previous Month
-    const thisMonth = expenses
-      .filter(
-        (e) =>
-          new Date(e.date).getMonth() === now.getMonth() &&
-          new Date(e.date).getFullYear() === now.getFullYear()
-      )
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    const previousMonth = expenses
-      .filter(
-        (e) =>
-          new Date(e.date).getMonth() === now.getMonth() - 1 &&
-          new Date(e.date).getFullYear() === now.getFullYear()
-      )
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    res.send({
-      total,
-      today,
-      yesterday,
-      thisWeek,
-      previousWeek,   // name changed ✅
-      thisMonth,
-      previousMonth,  // name changed ✅
+    app.post("/expenses", async (req, res) => {
+      const expense = req.body;
+      try {
+        const result = await expensesCollection.insertOne(expense);
+        res.send(result);
+      } catch (error) {
+        console.error("Error adding expense:", error);
+        res.status(500).send({ message: "Failed to add expense" });
+      }
     });
-  } catch (error) {
-    res.status(500).send({ message: "Failed to generate report" });
-  }
-});
 
+    // Get All Expenses
+    app.get("/expenses", async (req, res) => {
+      try {
+        const result = await expensesCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching expenses:", error);
+        res.status(500).send({ message: "Failed to fetch expenses" });
+      }
+    });
 
+    // Update Expense
+    app.put("/expenses/:id", async (req, res) => {
+      const id = req.params.id;
+      const updatedExpense = req.body;
+      try {
+        const result = await expensesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updatedExpense }
+        );
+        res.send(result);
+      } catch (error) {
+        console.error("Error updating expense:", error);
+        res.status(500).send({ message: "Failed to update expense" });
+      }
+    });
+
+    // Delete Expense
+    app.delete("/expenses/:id", async (req, res) => {
+      const id = req.params.id;
+      try {
+        const result = await expensesCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting expense:", error);
+        res.status(500).send({ message: "Failed to delete expense" });
+      }
+    });
+
+    app.get("/expenses/report", async (req, res) => {
+      try {
+        const expenses = await expensesCollection.find().toArray();
+        const now = new Date();
+
+        const total = expenses.reduce(
+          (sum, e) => sum + Number(e.price || 0),
+          0
+        );
+
+        // Today & Yesterday
+        const today = expenses
+          .filter((e) => new Date(e.date).toDateString() === now.toDateString())
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+        const yesterdayDate = new Date(now);
+        yesterdayDate.setDate(now.getDate() - 1);
+        const yesterday = expenses
+          .filter(
+            (e) =>
+              new Date(e.date).toDateString() === yesterdayDate.toDateString()
+          )
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+        // This Week & Previous Week
+        const weekStart = new Date(now);
+        weekStart.setDate(now.getDate() - 7);
+        const thisWeek = expenses
+          .filter((e) => new Date(e.date) >= weekStart)
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+        const prevWeekStart = new Date(now);
+        prevWeekStart.setDate(now.getDate() - 14);
+        const prevWeekEnd = new Date(now);
+        prevWeekEnd.setDate(now.getDate() - 7);
+        const previousWeek = expenses
+          .filter(
+            (e) =>
+              new Date(e.date) >= prevWeekStart &&
+              new Date(e.date) < prevWeekEnd
+          )
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+        // This Month & Previous Month
+        const thisMonth = expenses
+          .filter(
+            (e) =>
+              new Date(e.date).getMonth() === now.getMonth() &&
+              new Date(e.date).getFullYear() === now.getFullYear()
+          )
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+        const previousMonth = expenses
+          .filter(
+            (e) =>
+              new Date(e.date).getMonth() === now.getMonth() - 1 &&
+              new Date(e.date).getFullYear() === now.getFullYear()
+          )
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+        res.send({
+          total,
+          today,
+          yesterday,
+          thisWeek,
+          previousWeek,
+          thisMonth,
+          previousMonth,
+        });
+      } catch (error) {
+        res.status(500).send({ message: "Failed to generate report" });
+      }
+    });
+
+    // Get customer segments
+    app.get("/customer-segments", async (req, res) => {
+      try {
+        const pipeline = [
+          {
+            $group: {
+              _id: "$email",
+              name: { $first: "$fullName" },
+              phone: { $first: "$phone" },
+              totalOrders: { $sum: 1 },
+              totalSpend: { $sum: "$total" },
+              lastOrder: { $max: "$createdAt" },
+            },
+          },
+          {
+            $addFields: {
+              segment: {
+                $switch: {
+                  branches: [
+                    { case: { $gte: ["$totalOrders", 10] }, then: "Loyal" },
+                    {
+                      case: { $gte: ["$totalSpend", 20000] },
+                      then: "High Spender",
+                    },
+                    { case: { $gte: ["$totalOrders", 3] }, then: "Regular" },
+                  ],
+                  default: "One-time",
+                },
+              },
+            },
+          },
+          { $sort: { totalSpend: -1 } },
+        ];
+
+        const segments = await ordersCollection.aggregate(pipeline).toArray();
+        res.send(segments);
+      } catch (error) {
+        console.error("Failed to fetch segments:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
