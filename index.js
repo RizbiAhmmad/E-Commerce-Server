@@ -49,6 +49,7 @@ async function run() {
       database.collection("expense_categories");
     const expensesCollection = database.collection("expenses");
     const damageProductsCollection = database.collection("damage_products");
+    const returnProductsCollection = database.collection("return_products");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -1380,6 +1381,67 @@ app.delete("/damage-products/:id", async (req, res) => {
     res.status(500).send({ error: "Failed to delete damaged product" });
   }
 });
+
+// Add a new return product
+app.post("/return-products", async (req, res) => {
+  try {
+    const returnProduct = req.body;
+    const result = await returnProductsCollection.insertOne(returnProduct);
+    res.send(result);
+  } catch (error) {
+    console.error("Add Return Product Error:", error);
+    res.status(500).send({ error: "Failed to add return product" });
+  }
+});
+
+// Get all return products
+app.get("/return-products", async (req, res) => {
+  try {
+    const result = await returnProductsCollection.find().toArray();
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch return products" });
+  }
+});
+
+// Get a single return product by ID
+app.get("/return-products/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const product = await returnProductsCollection.findOne(query);
+    res.send(product);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch return product" });
+  }
+});
+
+// Update a return product by ID
+app.put("/return-products/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updatedProduct = req.body;
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = { $set: updatedProduct };
+    const result = await returnProductsCollection.updateOne(filter, updateDoc);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to update return product" });
+  }
+});
+
+// Delete a return product by ID
+app.delete("/return-products/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const result = await returnProductsCollection.deleteOne(query);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to delete return product" });
+  }
+});
+
 
 
     // await client.db("admin").command({ ping: 1 });
