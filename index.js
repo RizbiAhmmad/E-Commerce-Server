@@ -48,6 +48,7 @@ async function run() {
     const expenseCategoriesCollection =
       database.collection("expense_categories");
     const expensesCollection = database.collection("expenses");
+    const damageProductsCollection = database.collection("damage_products");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -1126,9 +1127,15 @@ async function run() {
     });
 
     // Add Expense
+    // Add Expense
     app.post("/expenses", async (req, res) => {
-      const expense = req.body;
       try {
+        const expense = {
+          ...req.body,
+          price: Number(req.body.price), // store as number
+          date: new Date(req.body.date), // store as Date
+        };
+
         const result = await expensesCollection.insertOne(expense);
         res.send(result);
       } catch (error) {
@@ -1148,15 +1155,21 @@ async function run() {
       }
     });
 
-    // Update Expense
+    // Update Expense - ensure proper data types
     app.put("/expenses/:id", async (req, res) => {
-      const id = req.params.id;
-      const updatedExpense = req.body;
+      const { id } = req.params;
       try {
+        const updatedExpense = {
+          ...req.body,
+          price: Number(req.body.price), // convert to number
+          date: new Date(req.body.date), // convert to Date
+        };
+
         const result = await expensesCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: updatedExpense }
         );
+
         res.send(result);
       } catch (error) {
         console.error("Error updating expense:", error);
@@ -1179,78 +1192,92 @@ async function run() {
     });
 
     app.get("/expenses/report", async (req, res) => {
-      try {
-        const expenses = await expensesCollection.find().toArray();
-        const now = new Date();
+  try {
+    const { startDate, endDate } = req.query;
 
-        const total = expenses.reduce(
-          (sum, e) => sum + Number(e.price || 0),
-          0
-        );
+    let filter = {};
+    if (startDate && endDate) {
+      filter.date = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate),
+      };
+    }
 
-        // Today & Yesterday
-        const today = expenses
-          .filter((e) => new Date(e.date).toDateString() === now.toDateString())
-          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+    const expenses = await expensesCollection.find(filter).toArray();
+    const now = new Date();
 
-        const yesterdayDate = new Date(now);
-        yesterdayDate.setDate(now.getDate() - 1);
-        const yesterday = expenses
-          .filter(
-            (e) =>
-              new Date(e.date).toDateString() === yesterdayDate.toDateString()
-          )
-          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+    const total = expenses.reduce(
+      (sum, e) => sum + Number(e.price || 0),
+      0
+    );
 
-        // This Week & Previous Week
-        const weekStart = new Date(now);
-        weekStart.setDate(now.getDate() - 7);
-        const thisWeek = expenses
-          .filter((e) => new Date(e.date) >= weekStart)
-          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+    // If custom date filter is applied → only return filtered total
+    if (startDate && endDate) {
+      return res.send({ total });
+    }
 
-        const prevWeekStart = new Date(now);
-        prevWeekStart.setDate(now.getDate() - 14);
-        const prevWeekEnd = new Date(now);
-        prevWeekEnd.setDate(now.getDate() - 7);
-        const previousWeek = expenses
-          .filter(
-            (e) =>
-              new Date(e.date) >= prevWeekStart &&
-              new Date(e.date) < prevWeekEnd
-          )
-          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+    // Otherwise → full report
+    const today = expenses
+      .filter((e) => new Date(e.date).toDateString() === now.toDateString())
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
-        // This Month & Previous Month
-        const thisMonth = expenses
-          .filter(
-            (e) =>
-              new Date(e.date).getMonth() === now.getMonth() &&
-              new Date(e.date).getFullYear() === now.getFullYear()
-          )
-          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+    const yesterdayDate = new Date(now);
+    yesterdayDate.setDate(now.getDate() - 1);
+    const yesterday = expenses
+      .filter(
+        (e) => new Date(e.date).toDateString() === yesterdayDate.toDateString()
+      )
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
-        const previousMonth = expenses
-          .filter(
-            (e) =>
-              new Date(e.date).getMonth() === now.getMonth() - 1 &&
-              new Date(e.date).getFullYear() === now.getFullYear()
-          )
-          .reduce((sum, e) => sum + Number(e.price || 0), 0);
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - 7);
+    const thisWeek = expenses
+      .filter((e) => new Date(e.date) >= weekStart)
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
-        res.send({
-          total,
-          today,
-          yesterday,
-          thisWeek,
-          previousWeek,
-          thisMonth,
-          previousMonth,
-        });
-      } catch (error) {
-        res.status(500).send({ message: "Failed to generate report" });
-      }
+    const prevWeekStart = new Date(now);
+    prevWeekStart.setDate(now.getDate() - 14);
+    const prevWeekEnd = new Date(now);
+    prevWeekEnd.setDate(now.getDate() - 7);
+    const previousWeek = expenses
+      .filter(
+        (e) =>
+          new Date(e.date) >= prevWeekStart &&
+          new Date(e.date) < prevWeekEnd
+      )
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+    const thisMonth = expenses
+      .filter(
+        (e) =>
+          new Date(e.date).getMonth() === now.getMonth() &&
+          new Date(e.date).getFullYear() === now.getFullYear()
+      )
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+    const previousMonth = expenses
+      .filter(
+        (e) =>
+          new Date(e.date).getMonth() === now.getMonth() - 1 &&
+          new Date(e.date).getFullYear() === now.getFullYear()
+      )
+      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+
+    res.send({
+      total,
+      today,
+      yesterday,
+      thisWeek,
+      previousWeek,
+      thisMonth,
+      previousMonth,
     });
+  } catch (error) {
+    console.error("Error generating report:", error);
+    res.status(500).send({ message: "Failed to generate report" });
+  }
+});
+
 
     // Get customer segments
     app.get("/customer-segments", async (req, res) => {
@@ -1293,6 +1320,67 @@ async function run() {
         res.status(500).send({ message: "Internal Server Error" });
       }
     });
+
+    // Add a new damaged product
+app.post("/damage-products", async (req, res) => {
+  try {
+    const damageProduct = req.body;
+    const result = await damageProductsCollection.insertOne(damageProduct);
+    res.send(result);
+  } catch (error) {
+    console.error("Add Damage Product Error:", error);
+    res.status(500).send({ error: "Failed to add damaged product" });
+  }
+});
+
+// Get all damaged products
+app.get("/damage-products", async (req, res) => {
+  try {
+    const result = await damageProductsCollection.find().toArray();
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch damaged products" });
+  }
+});
+
+// Get a single damaged product by ID
+app.get("/damage-products/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const product = await damageProductsCollection.findOne(query);
+    res.send(product);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch damaged product" });
+  }
+});
+
+// Update a damaged product by ID
+app.put("/damage-products/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updatedProduct = req.body;
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = { $set: updatedProduct };
+    const result = await damageProductsCollection.updateOne(filter, updateDoc);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to update damaged product" });
+  }
+});
+
+// Delete a damaged product by ID
+app.delete("/damage-products/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const result = await damageProductsCollection.deleteOne(query);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ error: "Failed to delete damaged product" });
+  }
+});
+
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
