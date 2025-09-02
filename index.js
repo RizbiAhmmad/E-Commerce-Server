@@ -50,6 +50,7 @@ async function run() {
     const expensesCollection = database.collection("expenses");
     const damageProductsCollection = database.collection("damage_products");
     const returnProductsCollection = database.collection("return_products");
+    const sliderCollection = database.collection("sliders");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -1440,6 +1441,55 @@ app.delete("/return-products/:id", async (req, res) => {
   } catch (error) {
     res.status(500).send({ error: "Failed to delete return product" });
   }
+});
+
+// Add a new slider
+app.post("/slider", async (req, res) => {
+  try {
+    const slider = req.body;
+    slider.createdAt = new Date();
+    const result = await sliderCollection.insertOne(slider);
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to add slider" });
+  }
+});
+
+// Get all sliders
+app.get("/slider", async (req, res) => {
+  try {
+    const sliders = await sliderCollection.find().toArray();
+    res.send(sliders);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to fetch sliders" });
+  }
+});
+
+// Get a single slider by ID
+app.get("/slider/:id", async (req, res) => {
+  const id = req.params.id;
+  const slider = await sliderCollection.findOne({ _id: new ObjectId(id) });
+  res.send(slider);
+});
+
+// Update a slider by ID
+app.put("/slider/:id", async (req, res) => {
+  const id = req.params.id;
+  const updateData = req.body;
+  const result = await sliderCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: updateData }
+  );
+  res.send(result);
+});
+
+// Delete a slider by ID
+app.delete("/slider/:id", async (req, res) => {
+  const id = req.params.id;
+  const result = await sliderCollection.deleteOne({ _id: new ObjectId(id) });
+  res.send(result);
 });
 
 
