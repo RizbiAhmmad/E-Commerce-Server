@@ -51,6 +51,7 @@ async function run() {
     const damageProductsCollection = database.collection("damage_products");
     const returnProductsCollection = database.collection("return_products");
     const sliderCollection = database.collection("sliders");
+    const footerCollection = database.collection("footers");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -1490,6 +1491,60 @@ app.delete("/slider/:id", async (req, res) => {
   const id = req.params.id;
   const result = await sliderCollection.deleteOne({ _id: new ObjectId(id) });
   res.send(result);
+});
+
+// Add Footer Info
+app.post("/footer", async (req, res) => {
+  try {
+    const footer = { ...req.body, createdAt: new Date() };
+    const result = await footerCollection.insertOne(footer);
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to add footer" });
+  }
+});
+
+// Get Latest Footer
+app.get("/footer", async (req, res) => {
+  try {
+    const latestFooter = await footerCollection
+      .find()
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .toArray();
+    res.send(latestFooter[0] || {});
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to fetch footer" });
+  }
+});
+
+// Update Footer
+app.put("/footer/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await footerCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: req.body }
+    );
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to update footer" });
+  }
+});
+
+// Delete Footer
+app.delete("/footer/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await footerCollection.deleteOne({ _id: new ObjectId(id) });
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to delete footer" });
+  }
 });
 
 
