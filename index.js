@@ -151,13 +151,21 @@ async function run() {
       res.send(result);
     });
 
-    // Get Subcategories (optionally filtered by category)
-    app.get("/subcategories", async (req, res) => {
-      const { categoryId } = req.query;
-      const query = categoryId ? { categoryId } : {};
-      const result = await subcategoriesCollection.find(query).toArray();
-      res.send(result);
-    });
+    // Get Subcategories with category data
+app.get("/subcategories", async (req, res) => {
+  const { categoryId } = req.query;
+  const query = categoryId ? { categoryId } : {};
+  const subcategories = await subcategoriesCollection.find(query).toArray();
+
+  // Optionally populate category name
+  for (let sub of subcategories) {
+    const cat = await categoriesCollection.findOne({ _id: new ObjectId(sub.categoryId) });
+    sub.categoryName = cat?.name || null;
+  }
+
+  res.send(subcategories);
+});
+
 
     // Delete Subcategory
     app.delete("/subcategories/:id", async (req, res) => {
@@ -314,30 +322,24 @@ async function run() {
       }
     });
 
-    // Get all products or filter by categoryId
-    app.get("/products", async (req, res) => {
-      try {
-        const { categoryId, subcategoryId, search } = req.query;
+    // Get all products or filter
+app.get("/products", async (req, res) => {
+  try {
+    const { categoryId, subcategoryId, brandId, search } = req.query;
+    let query = {};
 
-        let query = {};
+    if (categoryId) query.categoryId = categoryId;
+    if (subcategoryId) query.subcategoryId = subcategoryId;
+    if (brandId) query.brandId = brandId;
+    if (search) query.name = { $regex: search, $options: "i" };
 
-        if (categoryId) {
-          query.categoryId = categoryId;
-        }
-        if (subcategoryId) {
-          query.subcategoryId = subcategoryId;
-        }
-        if (search) {
-          query.name = { $regex: search, $options: "i" };
-        }
+    const products = await productsCollection.find(query).toArray();
+    res.send(products);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to fetch products" });
+  }
+});
 
-        const result = await productsCollection.find(query).toArray();
-        res.send(result);
-      } catch (error) {
-        console.error("Error fetching products:", error);
-        res.status(500).send({ message: "Failed to fetch products" });
-      }
-    });
 
     // Update a product by ID
     app.put("/products/:id", async (req, res) => {
@@ -1498,25 +1500,21 @@ app.post("/footer", async (req, res) => {
   try {
     const footer = { ...req.body, createdAt: new Date() };
     const result = await footerCollection.insertOne(footer);
-    res.send(result);
+    res.send({ insertedId: result.insertedId });
   } catch (err) {
     console.error(err);
     res.status(500).send({ error: "Failed to add footer" });
   }
 });
 
-// Get Latest Footer
+// Get All Footers
 app.get("/footer", async (req, res) => {
   try {
-    const latestFooter = await footerCollection
-      .find()
-      .sort({ createdAt: -1 })
-      .limit(1)
-      .toArray();
-    res.send(latestFooter[0] || {});
+    const allFooters = await footerCollection.find().toArray();
+    res.send(allFooters);
   } catch (err) {
     console.error(err);
-    res.status(500).send({ error: "Failed to fetch footer" });
+    res.status(500).send({ error: "Failed to fetch footers" });
   }
 });
 
@@ -1524,11 +1522,12 @@ app.get("/footer", async (req, res) => {
 app.put("/footer/:id", async (req, res) => {
   try {
     const id = req.params.id;
-    const result = await footerCollection.updateOne(
+    const result = await footerCollection.findOneAndUpdate(
       { _id: new ObjectId(id) },
-      { $set: req.body }
+      { $set: req.body },
+      { returnDocument: "after" }
     );
-    res.send(result);
+    res.send(result.value);
   } catch (err) {
     console.error(err);
     res.status(500).send({ error: "Failed to update footer" });
@@ -1546,6 +1545,33 @@ app.delete("/footer/:id", async (req, res) => {
     res.status(500).send({ error: "Failed to delete footer" });
   }
 });
+
+// Get all categories with subcategories
+app.get("/categories-with-subcategories", async (req, res) => {
+  try {
+    const categories = await categoriesCollection.find().toArray();
+
+    // প্রতিটা category এর subcategory যোগ করে দিচ্ছি
+    const categoriesWithSub = await Promise.all(
+      categories.map(async (cat) => {
+        const subs = await subcategoriesCollection
+          .find({ categoryId: cat._id.toString() })
+          .toArray();
+
+        return {
+          ...cat,
+          subcategories: subs,
+        };
+      })
+    );
+
+    res.send(categoriesWithSub);
+  } catch (error) {
+    console.error("Error fetching categories with subcategories:", error);
+    res.status(500).send({ message: "Failed to fetch categories with subcategories" });
+  }
+});
+
 
 
 
