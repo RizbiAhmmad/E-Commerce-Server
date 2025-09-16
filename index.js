@@ -52,6 +52,7 @@ async function run() {
     const returnProductsCollection = database.collection("return_products");
     const sliderCollection = database.collection("sliders");
     const footerCollection = database.collection("footers");
+    const offerCollection = database.collection("offers");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -152,20 +153,21 @@ async function run() {
     });
 
     // Get Subcategories with category data
-app.get("/subcategories", async (req, res) => {
-  const { categoryId } = req.query;
-  const query = categoryId ? { categoryId } : {};
-  const subcategories = await subcategoriesCollection.find(query).toArray();
+    app.get("/subcategories", async (req, res) => {
+      const { categoryId } = req.query;
+      const query = categoryId ? { categoryId } : {};
+      const subcategories = await subcategoriesCollection.find(query).toArray();
 
-  // Optionally populate category name
-  for (let sub of subcategories) {
-    const cat = await categoriesCollection.findOne({ _id: new ObjectId(sub.categoryId) });
-    sub.categoryName = cat?.name || null;
-  }
+      // Optionally populate category name
+      for (let sub of subcategories) {
+        const cat = await categoriesCollection.findOne({
+          _id: new ObjectId(sub.categoryId),
+        });
+        sub.categoryName = cat?.name || null;
+      }
 
-  res.send(subcategories);
-});
-
+      res.send(subcategories);
+    });
 
     // Delete Subcategory
     app.delete("/subcategories/:id", async (req, res) => {
@@ -323,23 +325,22 @@ app.get("/subcategories", async (req, res) => {
     });
 
     // Get all products or filter
-app.get("/products", async (req, res) => {
-  try {
-    const { categoryId, subcategoryId, brandId, search } = req.query;
-    let query = {};
+    app.get("/products", async (req, res) => {
+      try {
+        const { categoryId, subcategoryId, brandId, search } = req.query;
+        let query = {};
 
-    if (categoryId) query.categoryId = categoryId;
-    if (subcategoryId) query.subcategoryId = subcategoryId;
-    if (brandId) query.brandId = brandId;
-    if (search) query.name = { $regex: search, $options: "i" };
+        if (categoryId) query.categoryId = categoryId;
+        if (subcategoryId) query.subcategoryId = subcategoryId;
+        if (brandId) query.brandId = brandId;
+        if (search) query.name = { $regex: search, $options: "i" };
 
-    const products = await productsCollection.find(query).toArray();
-    res.send(products);
-  } catch (error) {
-    res.status(500).send({ message: "Failed to fetch products" });
-  }
-});
-
+        const products = await productsCollection.find(query).toArray();
+        res.send(products);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to fetch products" });
+      }
+    });
 
     // Update a product by ID
     app.put("/products/:id", async (req, res) => {
@@ -544,16 +545,71 @@ app.get("/products", async (req, res) => {
     });
 
     app.post("/orders", async (req, res) => {
-      try {
-        const order = req.body;
-        order.createdAt = new Date();
-        const result = await ordersCollection.insertOne(order);
-        res.send({ acknowledged: true, insertedId: result.insertedId });
-      } catch (error) {
-        console.error("Failed to place order:", error);
-        res.status(500).send({ message: "Failed to place order" });
+  try {
+    const order = req.body;
+    order.createdAt = new Date();
+
+    // save order first
+    const result = await ordersCollection.insertOne(order);
+
+    // if courier selected and active
+    if (order.courier) {
+      const courier = await courierCollection.findOne({
+        courierName: order.courier,
+        status: "active",
+      });
+
+      if (courier) {
+        try {
+          // Example Pathao API integration (dummy)
+          const response = await axios.post(
+            `${courier.baseUrl}/aladdin/api/v1/orders`,
+            {
+              order_id: result.insertedId,
+              recipient_name: order.customerName,
+              recipient_phone: order.customerPhone,
+              recipient_address: order.customerAddress,
+              amount_to_collect: order.totalPrice,
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${courier.apiKey}`,
+              },
+            }
+          );
+
+          // update order with courier response
+          await ordersCollection.updateOne(
+            { _id: result.insertedId },
+            {
+              $set: {
+                courierTrackingId: response.data.tracking_id || null,
+                courierStatus: "placed",
+              },
+            }
+          );
+        } catch (err) {
+          console.error("Courier API failed:", err.message);
+          await ordersCollection.updateOne(
+            { _id: result.insertedId },
+            {
+              $set: {
+                courierStatus: "failed",
+                courierError: err.message,
+              },
+            }
+          );
+        }
       }
-    });
+    }
+
+    res.send({ acknowledged: true, insertedId: result.insertedId });
+  } catch (error) {
+    console.error("Failed to place order:", error);
+    res.status(500).send({ message: "Failed to place order" });
+  }
+});
+
 
     // Get orders for a specific user
     app.get("/orders", async (req, res) => {
@@ -1197,92 +1253,92 @@ app.get("/products", async (req, res) => {
     });
 
     app.get("/expenses/report", async (req, res) => {
-  try {
-    const { startDate, endDate } = req.query;
+      try {
+        const { startDate, endDate } = req.query;
 
-    let filter = {};
-    if (startDate && endDate) {
-      filter.date = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate),
-      };
-    }
+        let filter = {};
+        if (startDate && endDate) {
+          filter.date = {
+            $gte: new Date(startDate),
+            $lte: new Date(endDate),
+          };
+        }
 
-    const expenses = await expensesCollection.find(filter).toArray();
-    const now = new Date();
+        const expenses = await expensesCollection.find(filter).toArray();
+        const now = new Date();
 
-    const total = expenses.reduce(
-      (sum, e) => sum + Number(e.price || 0),
-      0
-    );
+        const total = expenses.reduce(
+          (sum, e) => sum + Number(e.price || 0),
+          0
+        );
 
-    // If custom date filter is applied → only return filtered total
-    if (startDate && endDate) {
-      return res.send({ total });
-    }
+        // If custom date filter is applied → only return filtered total
+        if (startDate && endDate) {
+          return res.send({ total });
+        }
 
-    // Otherwise → full report
-    const today = expenses
-      .filter((e) => new Date(e.date).toDateString() === now.toDateString())
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+        // Otherwise → full report
+        const today = expenses
+          .filter((e) => new Date(e.date).toDateString() === now.toDateString())
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
-    const yesterdayDate = new Date(now);
-    yesterdayDate.setDate(now.getDate() - 1);
-    const yesterday = expenses
-      .filter(
-        (e) => new Date(e.date).toDateString() === yesterdayDate.toDateString()
-      )
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+        const yesterdayDate = new Date(now);
+        yesterdayDate.setDate(now.getDate() - 1);
+        const yesterday = expenses
+          .filter(
+            (e) =>
+              new Date(e.date).toDateString() === yesterdayDate.toDateString()
+          )
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - 7);
-    const thisWeek = expenses
-      .filter((e) => new Date(e.date) >= weekStart)
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+        const weekStart = new Date(now);
+        weekStart.setDate(now.getDate() - 7);
+        const thisWeek = expenses
+          .filter((e) => new Date(e.date) >= weekStart)
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
-    const prevWeekStart = new Date(now);
-    prevWeekStart.setDate(now.getDate() - 14);
-    const prevWeekEnd = new Date(now);
-    prevWeekEnd.setDate(now.getDate() - 7);
-    const previousWeek = expenses
-      .filter(
-        (e) =>
-          new Date(e.date) >= prevWeekStart &&
-          new Date(e.date) < prevWeekEnd
-      )
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+        const prevWeekStart = new Date(now);
+        prevWeekStart.setDate(now.getDate() - 14);
+        const prevWeekEnd = new Date(now);
+        prevWeekEnd.setDate(now.getDate() - 7);
+        const previousWeek = expenses
+          .filter(
+            (e) =>
+              new Date(e.date) >= prevWeekStart &&
+              new Date(e.date) < prevWeekEnd
+          )
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
-    const thisMonth = expenses
-      .filter(
-        (e) =>
-          new Date(e.date).getMonth() === now.getMonth() &&
-          new Date(e.date).getFullYear() === now.getFullYear()
-      )
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+        const thisMonth = expenses
+          .filter(
+            (e) =>
+              new Date(e.date).getMonth() === now.getMonth() &&
+              new Date(e.date).getFullYear() === now.getFullYear()
+          )
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
-    const previousMonth = expenses
-      .filter(
-        (e) =>
-          new Date(e.date).getMonth() === now.getMonth() - 1 &&
-          new Date(e.date).getFullYear() === now.getFullYear()
-      )
-      .reduce((sum, e) => sum + Number(e.price || 0), 0);
+        const previousMonth = expenses
+          .filter(
+            (e) =>
+              new Date(e.date).getMonth() === now.getMonth() - 1 &&
+              new Date(e.date).getFullYear() === now.getFullYear()
+          )
+          .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
-    res.send({
-      total,
-      today,
-      yesterday,
-      thisWeek,
-      previousWeek,
-      thisMonth,
-      previousMonth,
+        res.send({
+          total,
+          today,
+          yesterday,
+          thisWeek,
+          previousWeek,
+          thisMonth,
+          previousMonth,
+        });
+      } catch (error) {
+        console.error("Error generating report:", error);
+        res.status(500).send({ message: "Failed to generate report" });
+      }
     });
-  } catch (error) {
-    console.error("Error generating report:", error);
-    res.status(500).send({ message: "Failed to generate report" });
-  }
-});
-
 
     // Get customer segments
     app.get("/customer-segments", async (req, res) => {
@@ -1327,251 +1383,319 @@ app.get("/products", async (req, res) => {
     });
 
     // Add a new damaged product
-app.post("/damage-products", async (req, res) => {
-  try {
-    const damageProduct = req.body;
-    const result = await damageProductsCollection.insertOne(damageProduct);
-    res.send(result);
-  } catch (error) {
-    console.error("Add Damage Product Error:", error);
-    res.status(500).send({ error: "Failed to add damaged product" });
-  }
-});
+    app.post("/damage-products", async (req, res) => {
+      try {
+        const damageProduct = req.body;
+        const result = await damageProductsCollection.insertOne(damageProduct);
+        res.send(result);
+      } catch (error) {
+        console.error("Add Damage Product Error:", error);
+        res.status(500).send({ error: "Failed to add damaged product" });
+      }
+    });
 
-// Get all damaged products
-app.get("/damage-products", async (req, res) => {
-  try {
-    const result = await damageProductsCollection.find().toArray();
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ error: "Failed to fetch damaged products" });
-  }
-});
+    // Get all damaged products
+    app.get("/damage-products", async (req, res) => {
+      try {
+        const result = await damageProductsCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to fetch damaged products" });
+      }
+    });
 
-// Get a single damaged product by ID
-app.get("/damage-products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const query = { _id: new ObjectId(id) };
-    const product = await damageProductsCollection.findOne(query);
-    res.send(product);
-  } catch (error) {
-    res.status(500).send({ error: "Failed to fetch damaged product" });
-  }
-});
+    // Get a single damaged product by ID
+    app.get("/damage-products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const product = await damageProductsCollection.findOne(query);
+        res.send(product);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to fetch damaged product" });
+      }
+    });
 
-// Update a damaged product by ID
-app.put("/damage-products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const updatedProduct = req.body;
-    const filter = { _id: new ObjectId(id) };
-    const updateDoc = { $set: updatedProduct };
-    const result = await damageProductsCollection.updateOne(filter, updateDoc);
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ error: "Failed to update damaged product" });
-  }
-});
+    // Update a damaged product by ID
+    app.put("/damage-products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const updatedProduct = req.body;
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = { $set: updatedProduct };
+        const result = await damageProductsCollection.updateOne(
+          filter,
+          updateDoc
+        );
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to update damaged product" });
+      }
+    });
 
-// Delete a damaged product by ID
-app.delete("/damage-products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const query = { _id: new ObjectId(id) };
-    const result = await damageProductsCollection.deleteOne(query);
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ error: "Failed to delete damaged product" });
-  }
-});
+    // Delete a damaged product by ID
+    app.delete("/damage-products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await damageProductsCollection.deleteOne(query);
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to delete damaged product" });
+      }
+    });
 
-// Add a new return product
-app.post("/return-products", async (req, res) => {
-  try {
-    const returnProduct = req.body;
-    const result = await returnProductsCollection.insertOne(returnProduct);
-    res.send(result);
-  } catch (error) {
-    console.error("Add Return Product Error:", error);
-    res.status(500).send({ error: "Failed to add return product" });
-  }
-});
+    // Add a new return product
+    app.post("/return-products", async (req, res) => {
+      try {
+        const returnProduct = req.body;
+        const result = await returnProductsCollection.insertOne(returnProduct);
+        res.send(result);
+      } catch (error) {
+        console.error("Add Return Product Error:", error);
+        res.status(500).send({ error: "Failed to add return product" });
+      }
+    });
 
-// Get all return products
-app.get("/return-products", async (req, res) => {
-  try {
-    const result = await returnProductsCollection.find().toArray();
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ error: "Failed to fetch return products" });
-  }
-});
+    // Get all return products
+    app.get("/return-products", async (req, res) => {
+      try {
+        const result = await returnProductsCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to fetch return products" });
+      }
+    });
 
-// Get a single return product by ID
-app.get("/return-products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const query = { _id: new ObjectId(id) };
-    const product = await returnProductsCollection.findOne(query);
-    res.send(product);
-  } catch (error) {
-    res.status(500).send({ error: "Failed to fetch return product" });
-  }
-});
+    // Get a single return product by ID
+    app.get("/return-products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const product = await returnProductsCollection.findOne(query);
+        res.send(product);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to fetch return product" });
+      }
+    });
 
-// Update a return product by ID
-app.put("/return-products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const updatedProduct = req.body;
-    const filter = { _id: new ObjectId(id) };
-    const updateDoc = { $set: updatedProduct };
-    const result = await returnProductsCollection.updateOne(filter, updateDoc);
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ error: "Failed to update return product" });
-  }
-});
+    // Update a return product by ID
+    app.put("/return-products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const updatedProduct = req.body;
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = { $set: updatedProduct };
+        const result = await returnProductsCollection.updateOne(
+          filter,
+          updateDoc
+        );
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to update return product" });
+      }
+    });
 
-// Delete a return product by ID
-app.delete("/return-products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const query = { _id: new ObjectId(id) };
-    const result = await returnProductsCollection.deleteOne(query);
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ error: "Failed to delete return product" });
-  }
-});
+    // Delete a return product by ID
+    app.delete("/return-products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await returnProductsCollection.deleteOne(query);
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to delete return product" });
+      }
+    });
 
-// Add a new slider
-app.post("/slider", async (req, res) => {
+    // Add a new slider
+    app.post("/slider", async (req, res) => {
+      try {
+        const slider = req.body;
+        slider.createdAt = new Date();
+        const result = await sliderCollection.insertOne(slider);
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to add slider" });
+      }
+    });
+
+    // Get all sliders
+    app.get("/slider", async (req, res) => {
+      try {
+        const sliders = await sliderCollection.find().toArray();
+        res.send(sliders);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to fetch sliders" });
+      }
+    });
+
+    // Get a single slider by ID
+    app.get("/slider/:id", async (req, res) => {
+      const id = req.params.id;
+      const slider = await sliderCollection.findOne({ _id: new ObjectId(id) });
+      res.send(slider);
+    });
+
+    // Update a slider by ID
+    app.put("/slider/:id", async (req, res) => {
+      const id = req.params.id;
+      const updateData = req.body;
+      const result = await sliderCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updateData }
+      );
+      res.send(result);
+    });
+
+    // Delete a slider by ID
+    app.delete("/slider/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await sliderCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    // Add Footer Info
+    app.post("/footer", async (req, res) => {
+      try {
+        const footer = { ...req.body, createdAt: new Date() };
+        const result = await footerCollection.insertOne(footer);
+        res.send({ insertedId: result.insertedId });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to add footer" });
+      }
+    });
+
+    // Get All Footers
+    app.get("/footer", async (req, res) => {
+      try {
+        const allFooters = await footerCollection.find().toArray();
+        res.send(allFooters);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to fetch footers" });
+      }
+    });
+
+    // Update Footer
+    app.put("/footer/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await footerCollection.findOneAndUpdate(
+          { _id: new ObjectId(id) },
+          { $set: req.body },
+          { returnDocument: "after" }
+        );
+        res.send(result.value);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to update footer" });
+      }
+    });
+
+    // Delete Footer
+    app.delete("/footer/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await footerCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to delete footer" });
+      }
+    });
+
+    // Get all categories with subcategories
+    app.get("/categories-with-subcategories", async (req, res) => {
+      try {
+        const categories = await categoriesCollection.find().toArray();
+
+        const categoriesWithSub = await Promise.all(
+          categories.map(async (cat) => {
+            const subs = await subcategoriesCollection
+              .find({ categoryId: cat._id.toString() })
+              .toArray();
+
+            return {
+              ...cat,
+              subcategories: subs,
+            };
+          })
+        );
+
+        res.send(categoriesWithSub);
+      } catch (error) {
+        console.error("Error fetching categories with subcategories:", error);
+        res
+          .status(500)
+          .send({ message: "Failed to fetch categories with subcategories" });
+      }
+    });
+
+   // Get all offers
+app.get("/offers", async (req, res) => {
   try {
-    const slider = req.body;
-    slider.createdAt = new Date();
-    const result = await sliderCollection.insertOne(slider);
-    res.send(result);
+    const offers = await offerCollection.find().toArray();
+    res.send(offers);
   } catch (err) {
     console.error(err);
-    res.status(500).send({ error: "Failed to add slider" });
+    res.status(500).send({ error: "Failed to fetch offers" });
   }
 });
 
-// Get all sliders
-app.get("/slider", async (req, res) => {
-  try {
-    const sliders = await sliderCollection.find().toArray();
-    res.send(sliders);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ error: "Failed to fetch sliders" });
-  }
-});
-
-// Get a single slider by ID
-app.get("/slider/:id", async (req, res) => {
+// Get a single offer by ID
+app.get("/offers/:id", async (req, res) => {
   const id = req.params.id;
-  const slider = await sliderCollection.findOne({ _id: new ObjectId(id) });
-  res.send(slider);
+  const offer = await offerCollection.findOne({ _id: new ObjectId(id) });
+  res.send(offer);
 });
 
-// Update a slider by ID
-app.put("/slider/:id", async (req, res) => {
+// Add a new offer
+app.post("/offers", async (req, res) => {
+  const offerData = req.body; // { image, status, email }
+  try {
+    const result = await offerCollection.insertOne(offerData);
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to add offer" });
+  }
+});
+
+// Update an offer by ID
+app.put("/offers/:id", async (req, res) => {
   const id = req.params.id;
   const updateData = req.body;
-  const result = await sliderCollection.updateOne(
-    { _id: new ObjectId(id) },
-    { $set: updateData }
-  );
-  res.send(result);
-});
-
-// Delete a slider by ID
-app.delete("/slider/:id", async (req, res) => {
-  const id = req.params.id;
-  const result = await sliderCollection.deleteOne({ _id: new ObjectId(id) });
-  res.send(result);
-});
-
-// Add Footer Info
-app.post("/footer", async (req, res) => {
   try {
-    const footer = { ...req.body, createdAt: new Date() };
-    const result = await footerCollection.insertOne(footer);
-    res.send({ insertedId: result.insertedId });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ error: "Failed to add footer" });
-  }
-});
-
-// Get All Footers
-app.get("/footer", async (req, res) => {
-  try {
-    const allFooters = await footerCollection.find().toArray();
-    res.send(allFooters);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ error: "Failed to fetch footers" });
-  }
-});
-
-// Update Footer
-app.put("/footer/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const result = await footerCollection.findOneAndUpdate(
+    const result = await offerCollection.updateOne(
       { _id: new ObjectId(id) },
-      { $set: req.body },
-      { returnDocument: "after" }
+      { $set: updateData }
     );
-    res.send(result.value);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ error: "Failed to update footer" });
-  }
-});
-
-// Delete Footer
-app.delete("/footer/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const result = await footerCollection.deleteOne({ _id: new ObjectId(id) });
     res.send(result);
   } catch (err) {
     console.error(err);
-    res.status(500).send({ error: "Failed to delete footer" });
+    res.status(500).send({ error: "Failed to update offer" });
   }
 });
 
-// Get all categories with subcategories
-app.get("/categories-with-subcategories", async (req, res) => {
+// Delete an offer by ID
+app.delete("/offers/:id", async (req, res) => {
+  const id = req.params.id;
   try {
-    const categories = await categoriesCollection.find().toArray();
-
-    // প্রতিটা category এর subcategory যোগ করে দিচ্ছি
-    const categoriesWithSub = await Promise.all(
-      categories.map(async (cat) => {
-        const subs = await subcategoriesCollection
-          .find({ categoryId: cat._id.toString() })
-          .toArray();
-
-        return {
-          ...cat,
-          subcategories: subs,
-        };
-      })
-    );
-
-    res.send(categoriesWithSub);
-  } catch (error) {
-    console.error("Error fetching categories with subcategories:", error);
-    res.status(500).send({ message: "Failed to fetch categories with subcategories" });
+    const result = await offerCollection.deleteOne({ _id: new ObjectId(id) });
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to delete offer" });
   }
 });
-
 
 
 
