@@ -53,6 +53,7 @@ async function run() {
     const sliderCollection = database.collection("sliders");
     const footerCollection = database.collection("footers");
     const offerCollection = database.collection("offers");
+    const courierCollection = database.collection("courierSettings");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -1696,6 +1697,104 @@ app.delete("/offers/:id", async (req, res) => {
     res.status(500).send({ error: "Failed to delete offer" });
   }
 });
+
+// Save or Update Courier Settings
+app.post("/courier/settings", async (req, res) => {
+  try {
+    const data = req.body;
+    const existing = await courierCollection.findOne({
+      courierName: data.courierName,
+    });
+
+    if (existing) {
+      await courierCollection.updateOne(
+        { courierName: data.courierName },
+        { $set: data }
+      );
+    } else {
+      await courierCollection.insertOne(data);
+    }
+
+    res.send({ success: true, message: "Courier settings saved" });
+  } catch (error) {
+    console.error("Failed to save courier settings:", error);
+    res.status(500).send({ success: false, message: "Internal Server Error" });
+  }
+});
+
+// Get Active Couriers
+app.get("/courier/settings", async (req, res) => {
+  try {
+    const couriers = await courierCollection.find({ status: "active" }).toArray();
+    res.send(couriers);
+  } catch (error) {
+    console.error("Failed to fetch couriers:", error);
+    res.status(500).send({ success: false, message: "Internal Server Error" });
+  }
+});
+
+// Assign courier & place order to courier API
+app.patch("/orders/:id/courier", async (req, res) => {
+  try {
+    const { courierName } = req.body;
+    const id = req.params.id;
+
+    // Find order
+    const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+    if (!order) return res.status(404).send({ success: false, message: "Order not found" });
+
+    // Find courier
+    const courier = await courierCollection.findOne({ courierName, status: "active" });
+    if (!courier) {
+      return res.status(400).send({ success: false, message: "Courier not active or not found" });
+    }
+
+    // Update order with assigned courier
+    await ordersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { courier: courierName, courierStatus: "assigned", courierTrackingId: null } }
+    );
+
+    // Try sending order to courier API
+    try {
+      const response = await axios.post(
+        `${courier.baseUrl}/aladdin/api/v1/orders`,
+        {
+          order_id: order._id,
+          recipient_name: order.fullName,
+          recipient_phone: order.phone,
+          recipient_address: order.address,
+          amount_to_collect: order.total,
+        },
+        { headers: { Authorization: `Bearer ${courier.apiKey}` } }
+      );
+
+      await ordersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            courierStatus: "placed",
+            courierTrackingId: response.data.tracking_id || null,
+          },
+        }
+      );
+    } catch (err) {
+      console.error("Courier API failed:", err.message);
+      await ordersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: { courierStatus: "failed", courierError: err.message },
+        }
+      );
+    }
+
+    res.send({ success: true, message: "Courier assigned & API updated" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ success: false, message: "Internal Server Error" });
+  }
+});
+
 
 
 
