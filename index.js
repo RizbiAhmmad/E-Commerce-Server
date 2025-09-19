@@ -54,6 +54,7 @@ async function run() {
     const footerCollection = database.collection("footers");
     const offerCollection = database.collection("offers");
     const courierCollection = database.collection("courierSettings");
+    const whisperCollection = database.collection("wispers");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -546,71 +547,70 @@ async function run() {
     });
 
     app.post("/orders", async (req, res) => {
-  try {
-    const order = req.body;
-    order.createdAt = new Date();
+      try {
+        const order = req.body;
+        order.createdAt = new Date();
 
-    // save order first
-    const result = await ordersCollection.insertOne(order);
+        // save order first
+        const result = await ordersCollection.insertOne(order);
 
-    // if courier selected and active
-    if (order.courier) {
-      const courier = await courierCollection.findOne({
-        courierName: order.courier,
-        status: "active",
-      });
+        // if courier selected and active
+        if (order.courier) {
+          const courier = await courierCollection.findOne({
+            courierName: order.courier,
+            status: "active",
+          });
 
-      if (courier) {
-        try {
-          // Example Pathao API integration (dummy)
-          const response = await axios.post(
-            `${courier.baseUrl}/aladdin/api/v1/orders`,
-            {
-              order_id: result.insertedId,
-              recipient_name: order.customerName,
-              recipient_phone: order.customerPhone,
-              recipient_address: order.customerAddress,
-              amount_to_collect: order.totalPrice,
-            },
-            {
-              headers: {
-                Authorization: `Bearer ${courier.apiKey}`,
-              },
+          if (courier) {
+            try {
+              // Example Pathao API integration (dummy)
+              const response = await axios.post(
+                `${courier.baseUrl}/aladdin/api/v1/orders`,
+                {
+                  order_id: result.insertedId,
+                  recipient_name: order.customerName,
+                  recipient_phone: order.customerPhone,
+                  recipient_address: order.customerAddress,
+                  amount_to_collect: order.totalPrice,
+                },
+                {
+                  headers: {
+                    Authorization: `Bearer ${courier.apiKey}`,
+                  },
+                }
+              );
+
+              // update order with courier response
+              await ordersCollection.updateOne(
+                { _id: result.insertedId },
+                {
+                  $set: {
+                    courierTrackingId: response.data.tracking_id || null,
+                    courierStatus: "placed",
+                  },
+                }
+              );
+            } catch (err) {
+              console.error("Courier API failed:", err.message);
+              await ordersCollection.updateOne(
+                { _id: result.insertedId },
+                {
+                  $set: {
+                    courierStatus: "failed",
+                    courierError: err.message,
+                  },
+                }
+              );
             }
-          );
-
-          // update order with courier response
-          await ordersCollection.updateOne(
-            { _id: result.insertedId },
-            {
-              $set: {
-                courierTrackingId: response.data.tracking_id || null,
-                courierStatus: "placed",
-              },
-            }
-          );
-        } catch (err) {
-          console.error("Courier API failed:", err.message);
-          await ordersCollection.updateOne(
-            { _id: result.insertedId },
-            {
-              $set: {
-                courierStatus: "failed",
-                courierError: err.message,
-              },
-            }
-          );
+          }
         }
+
+        res.send({ acknowledged: true, insertedId: result.insertedId });
+      } catch (error) {
+        console.error("Failed to place order:", error);
+        res.status(500).send({ message: "Failed to place order" });
       }
-    }
-
-    res.send({ acknowledged: true, insertedId: result.insertedId });
-  } catch (error) {
-    console.error("Failed to place order:", error);
-    res.status(500).send({ message: "Failed to place order" });
-  }
-});
-
+    });
 
     // Get orders for a specific user
     app.get("/orders", async (req, res) => {
@@ -1640,163 +1640,226 @@ async function run() {
       }
     });
 
-   // Get all offers
-app.get("/offers", async (req, res) => {
-  try {
-    const offers = await offerCollection.find().toArray();
-    res.send(offers);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ error: "Failed to fetch offers" });
-  }
-});
-
-// Get a single offer by ID
-app.get("/offers/:id", async (req, res) => {
-  const id = req.params.id;
-  const offer = await offerCollection.findOne({ _id: new ObjectId(id) });
-  res.send(offer);
-});
-
-// Add a new offer
-app.post("/offers", async (req, res) => {
-  const offerData = req.body; // { image, status, email }
-  try {
-    const result = await offerCollection.insertOne(offerData);
-    res.send(result);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ error: "Failed to add offer" });
-  }
-});
-
-// Update an offer by ID
-app.put("/offers/:id", async (req, res) => {
-  const id = req.params.id;
-  const updateData = req.body;
-  try {
-    const result = await offerCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: updateData }
-    );
-    res.send(result);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ error: "Failed to update offer" });
-  }
-});
-
-// Delete an offer by ID
-app.delete("/offers/:id", async (req, res) => {
-  const id = req.params.id;
-  try {
-    const result = await offerCollection.deleteOne({ _id: new ObjectId(id) });
-    res.send(result);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ error: "Failed to delete offer" });
-  }
-});
-
-// Save or Update Courier Settings
-app.post("/courier/settings", async (req, res) => {
-  try {
-    const data = req.body;
-    const existing = await courierCollection.findOne({
-      courierName: data.courierName,
+    // Get all offers
+    app.get("/offers", async (req, res) => {
+      try {
+        const offers = await offerCollection.find().toArray();
+        res.send(offers);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to fetch offers" });
+      }
     });
 
-    if (existing) {
-      await courierCollection.updateOne(
-        { courierName: data.courierName },
-        { $set: data }
-      );
-    } else {
-      await courierCollection.insertOne(data);
-    }
+    // Get a single offer by ID
+    app.get("/offers/:id", async (req, res) => {
+      const id = req.params.id;
+      const offer = await offerCollection.findOne({ _id: new ObjectId(id) });
+      res.send(offer);
+    });
 
-    res.send({ success: true, message: "Courier settings saved" });
-  } catch (error) {
-    console.error("Failed to save courier settings:", error);
-    res.status(500).send({ success: false, message: "Internal Server Error" });
-  }
-});
+    // Add a new offer
+    app.post("/offers", async (req, res) => {
+      const offerData = req.body; // { image, status, email }
+      try {
+        const result = await offerCollection.insertOne(offerData);
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to add offer" });
+      }
+    });
 
-// Get Active Couriers
-app.get("/courier/settings", async (req, res) => {
-  try {
-    const couriers = await courierCollection.find({ status: "active" }).toArray();
-    res.send(couriers);
-  } catch (error) {
-    console.error("Failed to fetch couriers:", error);
-    res.status(500).send({ success: false, message: "Internal Server Error" });
-  }
-});
+    // Update an offer by ID
+    app.put("/offers/:id", async (req, res) => {
+      const id = req.params.id;
+      const updateData = req.body;
+      try {
+        const result = await offerCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to update offer" });
+      }
+    });
 
-// Assign courier & place order to courier API
-app.patch("/orders/:id/courier", async (req, res) => {
-  try {
-    const { courierName } = req.body;
-    const id = req.params.id;
+    // Delete an offer by ID
+    app.delete("/offers/:id", async (req, res) => {
+      const id = req.params.id;
+      try {
+        const result = await offerCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to delete offer" });
+      }
+    });
 
-    // Find order
-    const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
-    if (!order) return res.status(404).send({ success: false, message: "Order not found" });
+    // Save or Update Courier Settings
+    app.post("/courier/settings", async (req, res) => {
+      try {
+        const data = req.body;
+        const existing = await courierCollection.findOne({
+          courierName: data.courierName,
+        });
 
-    // Find courier
-    const courier = await courierCollection.findOne({ courierName, status: "active" });
-    if (!courier) {
-      return res.status(400).send({ success: false, message: "Courier not active or not found" });
-    }
-
-    // Update order with assigned courier
-    await ordersCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { courier: courierName, courierStatus: "assigned", courierTrackingId: null } }
-    );
-
-    // Try sending order to courier API
-    try {
-      const response = await axios.post(
-        `${courier.baseUrl}/aladdin/api/v1/orders`,
-        {
-          order_id: order._id,
-          recipient_name: order.fullName,
-          recipient_phone: order.phone,
-          recipient_address: order.address,
-          amount_to_collect: order.total,
-        },
-        { headers: { Authorization: `Bearer ${courier.apiKey}` } }
-      );
-
-      await ordersCollection.updateOne(
-        { _id: new ObjectId(id) },
-        {
-          $set: {
-            courierStatus: "placed",
-            courierTrackingId: response.data.tracking_id || null,
-          },
+        if (existing) {
+          await courierCollection.updateOne(
+            { courierName: data.courierName },
+            { $set: data }
+          );
+        } else {
+          await courierCollection.insertOne(data);
         }
-      );
-    } catch (err) {
-      console.error("Courier API failed:", err.message);
-      await ordersCollection.updateOne(
-        { _id: new ObjectId(id) },
-        {
-          $set: { courierStatus: "failed", courierError: err.message },
+
+        res.send({ success: true, message: "Courier settings saved" });
+      } catch (error) {
+        console.error("Failed to save courier settings:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
+    // Get Active Couriers
+    app.get("/courier/settings", async (req, res) => {
+      try {
+        const couriers = await courierCollection
+          .find({ status: "active" })
+          .toArray();
+        res.send(couriers);
+      } catch (error) {
+        console.error("Failed to fetch couriers:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
+    // Assign courier & place order to courier API
+    app.patch("/orders/:id/courier", async (req, res) => {
+      try {
+        const { courierName } = req.body;
+        const id = req.params.id;
+
+        // Find order
+        const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+        if (!order)
+          return res
+            .status(404)
+            .send({ success: false, message: "Order not found" });
+
+        // Find courier
+        const courier = await courierCollection.findOne({
+          courierName,
+          status: "active",
+        });
+        if (!courier) {
+          return res.status(400).send({
+            success: false,
+            message: "Courier not active or not found",
+          });
         }
-      );
-    }
 
-    res.send({ success: true, message: "Courier assigned & API updated" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ success: false, message: "Internal Server Error" });
-  }
-});
+        // Update order with assigned courier
+        await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              courier: courierName,
+              courierStatus: "assigned",
+              courierTrackingId: null,
+            },
+          }
+        );
 
+        // Try sending order to courier API
+        try {
+          const response = await axios.post(
+            `${courier.baseUrl}/aladdin/api/v1/orders`,
+            {
+              order_id: order._id,
+              recipient_name: order.fullName,
+              recipient_phone: order.phone,
+              recipient_address: order.address,
+              amount_to_collect: order.total,
+            },
+            { headers: { Authorization: `Bearer ${courier.apiKey}` } }
+          );
 
+          await ordersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                courierStatus: "placed",
+                courierTrackingId: response.data.tracking_id || null,
+              },
+            }
+          );
+        } catch (err) {
+          console.error("Courier API failed:", err.message);
+          await ordersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: { courierStatus: "failed", courierError: err.message },
+            }
+          );
+        }
 
+        res.send({ success: true, message: "Courier assigned & API updated" });
+      } catch (error) {
+        console.error(error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
+    app.post("/whisper", async (req, res) => {
+      const { email, productId } = req.body;
+
+      const exists = await whisperCollection.findOne({ email, productId });
+      if (exists) {
+        return res.send({ message: "Already added" });
+      }
+
+      const result = await whisperCollection.insertOne(req.body);
+      res.send(result);
+    });
+
+    app.get("/whisper", async (req, res) => {
+      const email = req.query.email;
+      if (!email) {
+        return res.status(400).send({ message: "Email is required" });
+      }
+
+      try {
+        const whisperItems = await whisperCollection.find({ email }).toArray();
+        res.send(whisperItems);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to get whisper items" });
+      }
+    });
+
+    // DELETE favourite by id
+    app.delete("/whisper/:id", async (req, res) => {
+      const id = req.params.id;
+      try {
+        const result = await whisperCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to delete favourite" });
+      }
+    });
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
