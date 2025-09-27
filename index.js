@@ -375,6 +375,7 @@ async function run() {
             variant: updatedProduct.variant,
             images: updatedProduct.images,
             email: updatedProduct.email,
+            barcode: updatedProduct.barcode,
           },
         };
 
@@ -834,9 +835,12 @@ async function run() {
           total_amount: totalAmount,
           currency: "BDT",
           tran_id: `tran_${Date.now()}`, // must be unique
-          success_url: "https://e-commerce-server-api.onrender.com/sslcommerz/success",
-          fail_url: "https://e-commerce-server-api.onrender.com/sslcommerz/fail",
-          cancel_url: "https://e-commerce-server-api.onrender.com/sslcommerz/cancel",
+          success_url:
+            "https://e-commerce-server-api.onrender.com/sslcommerz/success",
+          fail_url:
+            "https://e-commerce-server-api.onrender.com/sslcommerz/fail",
+          cancel_url:
+            "https://e-commerce-server-api.onrender.com/sslcommerz/cancel",
           ipn_url: "https://e-commerce-server-api.onrender.com/sslcommerz/ipn",
           shipping_method: "Courier",
           product_name: "Order Payment",
@@ -1060,90 +1064,88 @@ async function run() {
     });
 
     app.get("/sales-report", async (req, res) => {
-  try {
-    const deliveredOrders = (await ordersCollection.find({ status: "delivered" }).toArray())
-  .map(o => ({
-    ...o,
-    orderType: "Online",
-    cartItems: o.cartItems || [],
-    createdAt: o.createdAt || o.date || new Date(), 
-  }));
+      try {
+        const deliveredOrders = (
+          await ordersCollection.find({ status: "delivered" }).toArray()
+        ).map((o) => ({
+          ...o,
+          orderType: "Online",
+          cartItems: o.cartItems || [],
+          createdAt: o.createdAt || o.date || new Date(),
+        }));
 
+        const posOrders = (await posOrdersCollection.find().toArray()).map(
+          (o) => ({
+            ...o,
+            orderType: "POS",
+            cartItems: o.cartItems || [],
+            createdAt: o.createdAt || o.date || new Date(),
+          })
+        );
 
-const posOrders = (await posOrdersCollection.find().toArray())
-  .map(o => ({
-    ...o,
-    orderType: "POS",
-    cartItems: o.cartItems || [],
-    createdAt: o.createdAt || o.date || new Date(),
-  }));
+        // Combine all
+        const allOrders = [...deliveredOrders, ...posOrders].map((order) => ({
+          ...order,
+          products: order.cartItems || [],
+          total: order.totalPrice || order.total || 0,
+          orderType: order.orderType,
+        }));
 
+        const calcTotal = (orders) =>
+          orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
 
-// Combine all
-const allOrders = [...deliveredOrders, ...posOrders].map(order => ({
-  ...order,
-  products: order.cartItems || [],
-  total: order.totalPrice || order.total || 0,
-  orderType: order.orderType,
-}));
+        const filterByDate = (orders, period) => {
+          const now = new Date();
+          return orders.filter((order) => {
+            const orderDate = new Date(order.createdAt);
+            if (period === "today") {
+              return orderDate.toDateString() === now.toDateString();
+            } else if (period === "yesterday") {
+              const yest = new Date(now);
+              yest.setDate(now.getDate() - 1);
+              return orderDate.toDateString() === yest.toDateString();
+            } else if (period === "week") {
+              const weekAgo = new Date();
+              weekAgo.setDate(now.getDate() - 7);
+              return orderDate >= weekAgo;
+            } else if (period === "lastWeek") {
+              const prevWeekStart = new Date();
+              prevWeekStart.setDate(now.getDate() - 14);
+              const prevWeekEnd = new Date();
+              prevWeekEnd.setDate(now.getDate() - 7);
+              return orderDate >= prevWeekStart && orderDate < prevWeekEnd;
+            } else if (period === "month") {
+              return (
+                orderDate.getMonth() === now.getMonth() &&
+                orderDate.getFullYear() === now.getFullYear()
+              );
+            } else if (period === "lastMonth") {
+              const month = now.getMonth() - 1;
+              const year = now.getFullYear();
+              return (
+                orderDate.getMonth() === month &&
+                orderDate.getFullYear() === year
+              );
+            }
+            return true;
+          });
+        };
 
-
-    const calcTotal = (orders) =>
-      orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
-
-    const filterByDate = (orders, period) => {
-      const now = new Date();
-      return orders.filter((order) => {
-        const orderDate = new Date(order.createdAt);
-        if (period === "today") {
-          return orderDate.toDateString() === now.toDateString();
-        } else if (period === "yesterday") {
-          const yest = new Date(now);
-          yest.setDate(now.getDate() - 1);
-          return orderDate.toDateString() === yest.toDateString();
-        } else if (period === "week") {
-          const weekAgo = new Date();
-          weekAgo.setDate(now.getDate() - 7);
-          return orderDate >= weekAgo;
-        } else if (period === "lastWeek") {
-          const prevWeekStart = new Date();
-          prevWeekStart.setDate(now.getDate() - 14);
-          const prevWeekEnd = new Date();
-          prevWeekEnd.setDate(now.getDate() - 7);
-          return orderDate >= prevWeekStart && orderDate < prevWeekEnd;
-        } else if (period === "month") {
-          return (
-            orderDate.getMonth() === now.getMonth() &&
-            orderDate.getFullYear() === now.getFullYear()
-          );
-        } else if (period === "lastMonth") {
-          const month = now.getMonth() - 1;
-          const year = now.getFullYear();
-          return (
-            orderDate.getMonth() === month &&
-            orderDate.getFullYear() === year
-          );
-        }
-        return true;
-      });
-    };
-
-    res.send({
-      allTime: calcTotal(allOrders),
-      thisMonth: calcTotal(filterByDate(allOrders, "month")),
-      lastMonth: calcTotal(filterByDate(allOrders, "lastMonth")),
-      thisWeek: calcTotal(filterByDate(allOrders, "week")),
-      lastWeek: calcTotal(filterByDate(allOrders, "lastWeek")),
-      today: calcTotal(filterByDate(allOrders, "today")),
-      yesterday: calcTotal(filterByDate(allOrders, "yesterday")),
-      allOrders, // এখন সব order এ products array থাকবে
+        res.send({
+          allTime: calcTotal(allOrders),
+          thisMonth: calcTotal(filterByDate(allOrders, "month")),
+          lastMonth: calcTotal(filterByDate(allOrders, "lastMonth")),
+          thisWeek: calcTotal(filterByDate(allOrders, "week")),
+          lastWeek: calcTotal(filterByDate(allOrders, "lastWeek")),
+          today: calcTotal(filterByDate(allOrders, "today")),
+          yesterday: calcTotal(filterByDate(allOrders, "yesterday")),
+          allOrders,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to generate sales report" });
+      }
     });
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Failed to generate sales report" });
-  }
-});
-
 
     // Add Expense Category
     app.post("/expense-categories", async (req, res) => {
