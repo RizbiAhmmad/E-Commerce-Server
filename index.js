@@ -1879,6 +1879,107 @@ async function run() {
       }
     });
 
+    app.get("/profit-loss-report", async (req, res) => {
+  try {
+    // Online orders (delivered only)
+    const deliveredOrders = (
+      await ordersCollection.find({ status: "delivered" }).toArray()
+    ).map((o) => ({
+      ...o,
+      orderType: "Online",
+      cartItems: o.cartItems || [],
+      createdAt: o.createdAt || o.date || new Date(),
+    }));
+
+    // POS orders
+    const posOrders = (await posOrdersCollection.find().toArray()).map((o) => ({
+      ...o,
+      orderType: "POS",
+      cartItems: o.cartItems || [],
+      createdAt: o.createdAt || o.date || new Date(),
+    }));
+
+    // Combine all
+    const allOrders = [...deliveredOrders, ...posOrders];
+
+    // Helper: filter by period
+    const filterByDate = (orders, period) => {
+      const now = new Date();
+      return orders.filter((order) => {
+        const orderDate = new Date(order.createdAt);
+        if (period === "today") {
+          return orderDate.toDateString() === now.toDateString();
+        } else if (period === "yesterday") {
+          const yest = new Date(now);
+          yest.setDate(now.getDate() - 1);
+          return orderDate.toDateString() === yest.toDateString();
+        } else if (period === "week") {
+          const weekAgo = new Date();
+          weekAgo.setDate(now.getDate() - 7);
+          return orderDate >= weekAgo;
+        } else if (period === "lastWeek") {
+          const prevWeekStart = new Date();
+          prevWeekStart.setDate(now.getDate() - 14);
+          const prevWeekEnd = new Date();
+          prevWeekEnd.setDate(now.getDate() - 7);
+          return orderDate >= prevWeekStart && orderDate < prevWeekEnd;
+        } else if (period === "month") {
+          return (
+            orderDate.getMonth() === now.getMonth() &&
+            orderDate.getFullYear() === now.getFullYear()
+          );
+        } else if (period === "lastMonth") {
+          const month = now.getMonth() - 1;
+          const year = now.getFullYear();
+          return (
+            orderDate.getMonth() === month && orderDate.getFullYear() === year
+          );
+        }
+        return true;
+      });
+    };
+
+    // Helper: calculate totals
+    const calcProfitLoss = (orders) => {
+      let sales = 0;
+      let cost = 0;
+      let discount = 0;
+      let tax = 0;
+
+      orders.forEach((order) => {
+        discount += Number(order.discount || 0);
+        tax += Number(order.tax || 0);
+
+        (order.cartItems || []).forEach((p) => {
+          const totalSell = Number(p.price) * Number(p.quantity);
+          const totalCost = Number(p.purchasePrice || 0) * Number(p.quantity);
+
+          sales += totalSell;
+          cost += totalCost;
+        });
+      });
+
+      const profit = sales - cost - discount + tax;
+      return { sales, cost, discount, tax, profit };
+    };
+
+    res.send({
+      allTime: calcProfitLoss(allOrders),
+      thisMonth: calcProfitLoss(filterByDate(allOrders, "month")),
+      lastMonth: calcProfitLoss(filterByDate(allOrders, "lastMonth")),
+      thisWeek: calcProfitLoss(filterByDate(allOrders, "week")),
+      lastWeek: calcProfitLoss(filterByDate(allOrders, "lastWeek")),
+      today: calcProfitLoss(filterByDate(allOrders, "today")),
+      yesterday: calcProfitLoss(filterByDate(allOrders, "yesterday")),
+      allOrders,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Failed to generate profit-loss report" });
+  }
+});
+
+
     // await client.db("admin").command({ ping: 1 });
     // console.log(
     //   "Pinged your deployment. You successfully connected to MongoDB!"
