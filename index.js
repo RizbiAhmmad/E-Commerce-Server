@@ -1401,12 +1401,21 @@ async function run() {
       }
     });
 
-    // Add a new damaged product
+    // Add a new damaged product + stock update
     app.post("/damage-products", async (req, res) => {
       try {
         const damageProduct = req.body;
-        const result = await damageProductsCollection.insertOne(damageProduct);
-        res.send(result);
+        const { productId, quantity } = damageProduct;
+
+        const damageResult = await damageProductsCollection.insertOne(
+          damageProduct
+        );
+        const stockUpdate = await productsCollection.updateOne(
+          { _id: new ObjectId(productId) },
+          { $inc: { stock: -Number(quantity) } }
+        );
+
+        res.send({ damageResult, stockUpdate });
       } catch (error) {
         console.error("Add Damage Product Error:", error);
         res.status(500).send({ error: "Failed to add damaged product" });
@@ -1423,11 +1432,10 @@ async function run() {
       }
     });
 
-    // Get a single damaged product by ID
+    // Get one
     app.get("/damage-products/:id", async (req, res) => {
       try {
-        const id = req.params.id;
-        const query = { _id: new ObjectId(id) };
+        const query = { _id: new ObjectId(req.params.id) };
         const product = await damageProductsCollection.findOne(query);
         res.send(product);
       } catch (error) {
@@ -1435,12 +1443,11 @@ async function run() {
       }
     });
 
-    // Update a damaged product by ID
+    // Update
     app.put("/damage-products/:id", async (req, res) => {
       try {
-        const id = req.params.id;
         const updatedProduct = req.body;
-        const filter = { _id: new ObjectId(id) };
+        const filter = { _id: new ObjectId(req.params.id) };
         const updateDoc = { $set: updatedProduct };
         const result = await damageProductsCollection.updateOne(
           filter,
@@ -1452,11 +1459,10 @@ async function run() {
       }
     });
 
-    // Delete a damaged product by ID
+    // Delete
     app.delete("/damage-products/:id", async (req, res) => {
       try {
-        const id = req.params.id;
-        const query = { _id: new ObjectId(id) };
+        const query = { _id: new ObjectId(req.params.id) };
         const result = await damageProductsCollection.deleteOne(query);
         res.send(result);
       } catch (error) {
@@ -1880,105 +1886,110 @@ async function run() {
     });
 
     app.get("/profit-loss-report", async (req, res) => {
-  try {
-    // Online orders (delivered only)
-    const deliveredOrders = (
-      await ordersCollection.find({ status: "delivered" }).toArray()
-    ).map((o) => ({
-      ...o,
-      orderType: "Online",
-      cartItems: o.cartItems || [],
-      createdAt: o.createdAt || o.date || new Date(),
-    }));
+      try {
+        // Online orders (delivered only)
+        const deliveredOrders = (
+          await ordersCollection.find({ status: "delivered" }).toArray()
+        ).map((o) => ({
+          ...o,
+          orderType: "Online",
+          cartItems: o.cartItems || [],
+          createdAt: o.createdAt || o.date || new Date(),
+        }));
 
-    // POS orders
-    const posOrders = (await posOrdersCollection.find().toArray()).map((o) => ({
-      ...o,
-      orderType: "POS",
-      cartItems: o.cartItems || [],
-      createdAt: o.createdAt || o.date || new Date(),
-    }));
+        // POS orders
+        const posOrders = (await posOrdersCollection.find().toArray()).map(
+          (o) => ({
+            ...o,
+            orderType: "POS",
+            cartItems: o.cartItems || [],
+            createdAt: o.createdAt || o.date || new Date(),
+          })
+        );
 
-    // Combine all
-    const allOrders = [...deliveredOrders, ...posOrders];
+        // Combine all
+        const allOrders = [...deliveredOrders, ...posOrders];
 
-    // Helper: filter by period
-    const filterByDate = (orders, period) => {
-      const now = new Date();
-      return orders.filter((order) => {
-        const orderDate = new Date(order.createdAt);
-        if (period === "today") {
-          return orderDate.toDateString() === now.toDateString();
-        } else if (period === "yesterday") {
-          const yest = new Date(now);
-          yest.setDate(now.getDate() - 1);
-          return orderDate.toDateString() === yest.toDateString();
-        } else if (period === "week") {
-          const weekAgo = new Date();
-          weekAgo.setDate(now.getDate() - 7);
-          return orderDate >= weekAgo;
-        } else if (period === "lastWeek") {
-          const prevWeekStart = new Date();
-          prevWeekStart.setDate(now.getDate() - 14);
-          const prevWeekEnd = new Date();
-          prevWeekEnd.setDate(now.getDate() - 7);
-          return orderDate >= prevWeekStart && orderDate < prevWeekEnd;
-        } else if (period === "month") {
-          return (
-            orderDate.getMonth() === now.getMonth() &&
-            orderDate.getFullYear() === now.getFullYear()
-          );
-        } else if (period === "lastMonth") {
-          const month = now.getMonth() - 1;
-          const year = now.getFullYear();
-          return (
-            orderDate.getMonth() === month && orderDate.getFullYear() === year
-          );
-        }
-        return true;
-      });
-    };
+        // Helper: filter by period
+        const filterByDate = (orders, period) => {
+          const now = new Date();
+          return orders.filter((order) => {
+            const orderDate = new Date(order.createdAt);
+            if (period === "today") {
+              return orderDate.toDateString() === now.toDateString();
+            } else if (period === "yesterday") {
+              const yest = new Date(now);
+              yest.setDate(now.getDate() - 1);
+              return orderDate.toDateString() === yest.toDateString();
+            } else if (period === "week") {
+              const weekAgo = new Date();
+              weekAgo.setDate(now.getDate() - 7);
+              return orderDate >= weekAgo;
+            } else if (period === "lastWeek") {
+              const prevWeekStart = new Date();
+              prevWeekStart.setDate(now.getDate() - 14);
+              const prevWeekEnd = new Date();
+              prevWeekEnd.setDate(now.getDate() - 7);
+              return orderDate >= prevWeekStart && orderDate < prevWeekEnd;
+            } else if (period === "month") {
+              return (
+                orderDate.getMonth() === now.getMonth() &&
+                orderDate.getFullYear() === now.getFullYear()
+              );
+            } else if (period === "lastMonth") {
+              const month = now.getMonth() - 1;
+              const year = now.getFullYear();
+              return (
+                orderDate.getMonth() === month &&
+                orderDate.getFullYear() === year
+              );
+            }
+            return true;
+          });
+        };
 
-    // Helper: calculate totals
-    const calcProfitLoss = (orders) => {
-      let sales = 0;
-      let cost = 0;
-      let discount = 0;
-      let tax = 0;
+        // Helper: calculate totals
+        const calcProfitLoss = (orders) => {
+          let sales = 0;
+          let cost = 0;
+          let discount = 0;
+          let tax = 0;
 
-      orders.forEach((order) => {
-        discount += Number(order.discount || 0);
-        tax += Number(order.tax || 0);
+          orders.forEach((order) => {
+            discount += Number(order.discount || 0);
+            tax += Number(order.tax || 0);
 
-        (order.cartItems || []).forEach((p) => {
-          const totalSell = Number(p.price) * Number(p.quantity);
-          const totalCost = Number(p.purchasePrice || 0) * Number(p.quantity);
+            (order.cartItems || []).forEach((p) => {
+              const totalSell = Number(p.price) * Number(p.quantity);
+              const totalCost =
+                Number(p.purchasePrice || 0) * Number(p.quantity);
 
-          sales += totalSell;
-          cost += totalCost;
+              sales += totalSell;
+              cost += totalCost;
+            });
+          });
+
+          const profit = sales - cost - discount + tax;
+          return { sales, cost, discount, tax, profit };
+        };
+
+        res.send({
+          allTime: calcProfitLoss(allOrders),
+          thisMonth: calcProfitLoss(filterByDate(allOrders, "month")),
+          lastMonth: calcProfitLoss(filterByDate(allOrders, "lastMonth")),
+          thisWeek: calcProfitLoss(filterByDate(allOrders, "week")),
+          lastWeek: calcProfitLoss(filterByDate(allOrders, "lastWeek")),
+          today: calcProfitLoss(filterByDate(allOrders, "today")),
+          yesterday: calcProfitLoss(filterByDate(allOrders, "yesterday")),
+          allOrders,
         });
-      });
-
-      const profit = sales - cost - discount + tax;
-      return { sales, cost, discount, tax, profit };
-    };
-
-    res.send({
-      allTime: calcProfitLoss(allOrders),
-      thisMonth: calcProfitLoss(filterByDate(allOrders, "month")),
-      lastMonth: calcProfitLoss(filterByDate(allOrders, "lastMonth")),
-      thisWeek: calcProfitLoss(filterByDate(allOrders, "week")),
-      lastWeek: calcProfitLoss(filterByDate(allOrders, "lastWeek")),
-      today: calcProfitLoss(filterByDate(allOrders, "today")),
-      yesterday: calcProfitLoss(filterByDate(allOrders, "yesterday")),
-      allOrders,
+      } catch (error) {
+        console.error(error);
+        res
+          .status(500)
+          .send({ message: "Failed to generate profit-loss report" });
+      }
     });
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Failed to generate profit-loss report" });
-  }
-});
-
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
