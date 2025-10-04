@@ -55,6 +55,7 @@ async function run() {
     const offerCollection = database.collection("offers");
     const courierCollection = database.collection("courierSettings");
     const whisperCollection = database.collection("wispers");
+    const policiesCollection = database.collection("policies");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -2040,6 +2041,74 @@ async function run() {
         res
           .status(500)
           .send({ message: "Failed to generate profit-loss report" });
+      }
+    });
+
+    // Add a new policy
+    app.post("/policies", async (req, res) => {
+      try {
+        const policy = req.body;
+        policy.createdAt = new Date();
+        const result = await policiesCollection.insertOne(policy);
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to add policy" });
+      }
+    });
+
+    // Get all policies
+    app.get("/policies", async (req, res) => {
+      try {
+        const policies = await policiesCollection.find().toArray();
+        res.send(policies);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to fetch policies" });
+      }
+    });
+
+    // Get a single policy by ID
+    app.get("/policies/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const policy = await policiesCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        res.send(policy);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to fetch policy" });
+      }
+    });
+
+    // Update a policy by ID
+    app.put("/policies/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const updateData = req.body;
+        const result = await policiesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to update policy" });
+      }
+    });
+
+    // Delete a policy by ID
+    app.delete("/policies/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await policiesCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to delete policy" });
       }
     });
 
