@@ -687,6 +687,33 @@ async function run() {
       }
     });
 
+    // Update return info (date + reason)
+    app.patch("/orders/:id/return", async (req, res) => {
+      try {
+        const { returnDate, returnReason } = req.body;
+        const id = req.params.id;
+
+        const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+        if (!order) {
+          return res
+            .status(404)
+            .send({ success: false, message: "Order not found" });
+        }
+
+        await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { returnDate: new Date(returnDate), returnReason } }
+        );
+
+        res.send({ success: true, message: "Return info updated" });
+      } catch (error) {
+        console.error("Failed to update return info:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
     app.post("/coupons", async (req, res) => {
       try {
         const coupon = req.body;
@@ -1443,18 +1470,43 @@ async function run() {
       }
     });
 
-    // Update
+    // Update damage product + adjust stock
     app.put("/damage-products/:id", async (req, res) => {
       try {
+        const id = req.params.id;
         const updatedProduct = req.body;
-        const filter = { _id: new ObjectId(req.params.id) };
+
+        // Find existing damage product before update
+        const existingDamage = await damageProductsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!existingDamage) {
+          return res.status(404).send({ error: "Damage product not found" });
+        }
+
+        const filter = { _id: new ObjectId(id) };
         const updateDoc = { $set: updatedProduct };
         const result = await damageProductsCollection.updateOne(
           filter,
           updateDoc
         );
-        res.send(result);
+
+        if (updatedProduct.productId && updatedProduct.quantity !== undefined) {
+          const diff =
+            Number(updatedProduct.quantity) - Number(existingDamage.quantity);
+
+          if (diff !== 0) {
+            // Update stock accordingly
+            await productsCollection.updateOne(
+              { _id: new ObjectId(updatedProduct.productId) },
+              { $inc: { stock: -diff } }
+            );
+          }
+        }
+
+        res.send({ result, stockUpdated: true });
       } catch (error) {
+        console.error("Update Damage Product Error:", error);
         res.status(500).send({ error: "Failed to update damaged product" });
       }
     });
