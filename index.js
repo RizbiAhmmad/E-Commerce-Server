@@ -864,12 +864,12 @@ async function run() {
           currency: "BDT",
           tran_id: `tran_${Date.now()}`, // must be unique
           success_url:
-            "https://e-commerce-server-api.onrender.com/sslcommerz/success",
+            "https://api.organic.bangladeshiit.com/sslcommerz/success",
           fail_url:
-            "https://e-commerce-server-api.onrender.com/sslcommerz/fail",
+            "https://api.organic.bangladeshiit.com/sslcommerz/fail",
           cancel_url:
-            "https://e-commerce-server-api.onrender.com/sslcommerz/cancel",
-          ipn_url: "https://e-commerce-server-api.onrender.com/sslcommerz/ipn",
+            "https://api.organic.bangladeshiit.com/sslcommerz/cancel",
+          ipn_url: "https://api.organic.bangladeshiit.com/sslcommerz/ipn",
           shipping_method: "Courier",
           product_name: "Order Payment",
           product_category: "Ecommerce",
