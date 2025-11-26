@@ -6,7 +6,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 
 const SSLCommerzPayment = require("sslcommerz-lts");
-
+const axios = require("axios");
 const store_id = process.env.SSL_ID;
 const store_passwd = process.env.SSL_PASS;
 const is_live = false; // Sandbox mode
@@ -56,6 +56,7 @@ async function run() {
     const courierCollection = database.collection("courierSettings");
     const whisperCollection = database.collection("wispers");
     const policiesCollection = database.collection("policies");
+    const landingPagesCollection = database.collection("landing_pages");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -1900,104 +1901,113 @@ async function run() {
 
     // Assign courier & place order to courier API
     app.patch("/orders/:id/courier", async (req, res) => {
-      try {
-        const { courierName } = req.body;
-        const id = req.params.id;
+    try {
+      const { courierName } = req.body;
+      const id = req.params.id;
 
-        const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
-        if (!order)
-          return res
-            .status(404)
-            .send({ success: false, message: "Order not found" });
+      // Fetch order
+      const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+      if (!order) return res.status(404).send({ success: false, message: "Order not found" });
 
-        const courier = await courierCollection.findOne({
-          courierName,
-          status: "active",
+      // Fetch courier credentials
+      const courier = await courierCollection.findOne({
+        courierName,
+        status: "active",
+      });
+
+      if (!courier)
+        return res.status(400).send({
+          success: false,
+          message: "Courier not active or not found",
         });
 
-        if (!courier)
-          return res.status(400).send({
-            success: false,
-            message: "Courier not active or not found",
-          });
+      // Mark order as assigned
+      await ordersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            courier: courierName,
+            courierStatus: "assigned",
+            courierTrackingId: null,
+          },
+        }
+      );
 
-        // Update order as assigned
+      // Prepare payload based on courier type
+      let payload = {};
+      let apiEndpoint = "";
+
+      if (courierName === "pathao") {
+        apiEndpoint = `${courier.baseUrl}/aladdin/api/v1/orders`;
+        payload = {
+          store_id: courier.storeId,
+          order_id: order._id.toString(),
+          recipient_name: order.fullName,
+          recipient_phone: order.phone,
+          recipient_address: order.address,
+          amount_to_collect: order.total,
+        };
+      }
+
+      if (courierName === "steadfast") {
+        apiEndpoint = `${courier.baseUrl}/order/insert`;
+        payload = {
+          invoice: order._id.toString(),
+          recipient_name: order.fullName,
+          recipient_phone: order.phone,
+          delivery_address: order.address,
+          cod_amount: order.total,
+        };
+      }
+
+      if (courierName === "redx") {
+        apiEndpoint = `${courier.baseUrl}/v1.0.0/orders`;
+        payload = {
+          customer_name: order.fullName,
+          customer_phone: order.phone,
+          customer_address: order.address,
+          order_id: order._id.toString(),
+          payable_amount: order.total,
+        };
+      }
+
+      // Send request
+      let trackingId = null;
+
+      try {
+        const response = await axios.post(apiEndpoint, payload, {
+          headers: {
+            Authorization: `Bearer ${courier.apiKey}`,
+          },
+        });
+
+        // Tracking ID mapping
+        if (courierName === "pathao") trackingId = response.data?.tracking_id;
+        if (courierName === "steadfast") trackingId = response.data?.consignment_id;
+        if (courierName === "redx") trackingId = response.data?.data?.tracking_code;
+
+        // Update order
         await ordersCollection.updateOne(
           { _id: new ObjectId(id) },
-          {
-            $set: {
-              courier: courierName,
-              courierStatus: "assigned",
-              courierTrackingId: null,
-            },
-          }
+          { $set: { courierStatus: "placed", courierTrackingId: trackingId } }
         );
 
-        // Prepare courier-specific payload
-        let payload = {};
-        if (courierName === "pathao") {
-          payload = {
-            store_id: courier.storeId,
-            order_id: order._id.toString(),
-            recipient_name: order.fullName,
-            recipient_phone: order.phone,
-            recipient_address: order.address,
-            amount_to_collect: order.total,
-          };
-        } else if (courierName === "steadfast") {
-          payload = {
-            invoice: order._id.toString(),
-            recipient_name: order.fullName,
-            recipient_phone: order.phone,
-            delivery_address: order.address,
-            cod_amount: order.total,
-          };
-        } else if (courierName === "redx") {
-          payload = {
-            customer_name: order.fullName,
-            customer_phone: order.phone,
-            customer_address: order.address,
-            order_id: order._id.toString(),
-            payable_amount: order.total,
-          };
-        }
+      } catch (err) {
+        console.error("Courier API Failed:", err.message);
 
-        // Send to courier API
-        try {
-          const response = await axios.post(
-            `${courier.baseUrl}/aladdin/api/v1/orders`,
-            payload,
-            { headers: { Authorization: `Bearer ${courier.apiKey}` } }
-          );
-
-          // Map tracking ID based on courier
-          let trackingId = null;
-          if (courierName === "pathao") trackingId = response.data?.tracking_id;
-          else if (courierName === "steadfast")
-            trackingId = response.data?.consignment_id;
-          else if (courierName === "redx")
-            trackingId = response.data?.data?.tracking_code;
-
-          await ordersCollection.updateOne(
-            { _id: new ObjectId(id) },
-            { $set: { courierStatus: "placed", courierTrackingId: trackingId } }
-          );
-        } catch (err) {
-          console.error("Courier API failed:", err.message);
-          await ordersCollection.updateOne(
-            { _id: new ObjectId(id) },
-            { $set: { courierStatus: "failed", courierError: err.message } }
-          );
-        }
-
-        res.send({ success: true, message: "Courier assigned & API updated" });
-      } catch (error) {
-        console.error(error);
-        res
-          .status(500)
-          .send({ success: false, message: "Internal Server Error" });
+        await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { courierStatus: "failed", courierError: err.message } }
+        );
       }
-    });
+
+      res.send({ success: true, message: "Courier assigned & API sent" });
+
+    } catch (error) {
+      console.error("Assign courier error:", error);
+      res.status(500).send({ success: false, message: "Internal Server Error" });
+    }
+  });
 
     // Toggle Courier Status
     app.patch("/courier/:id/status", async (req, res) => {
@@ -2243,6 +2253,68 @@ async function run() {
       } catch (err) {
         console.error(err);
         res.status(500).send({ error: "Failed to delete policy" });
+      }
+    });
+
+    app.post("/landing-pages", async (req, res) => {
+      try {
+        const landing = req.body;
+        landing.createdAt = new Date();
+
+        const result = await landingPagesCollection.insertOne(landing);
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to add landing page" });
+      }
+    });
+
+    app.get("/landing-pages", async (req, res) => {
+      try {
+        const pages = await landingPagesCollection.find().toArray();
+        res.send(pages);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to fetch landing pages" });
+      }
+    });
+    app.get("/landing-pages/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const page = await landingPagesCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        res.send(page);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to fetch landing page" });
+      }
+    });
+    app.put("/landing-pages/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const updateData = req.body;
+
+        const result = await landingPagesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to update landing page" });
+      }
+    });
+    app.delete("/landing-pages/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await landingPagesCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Failed to delete landing page" });
       }
     });
 
