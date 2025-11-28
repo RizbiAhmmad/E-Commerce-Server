@@ -11,8 +11,26 @@ const store_id = process.env.SSL_ID;
 const store_passwd = process.env.SSL_PASS;
 const is_live = false; // Sandbox mode
 
+const sendSMS = async (phone, message) => {
+  try {
+    const apiKey = process.env.BULKSMS_API_KEY;
+    const senderId = process.env.BULKSMS_SENDER_ID;
+
+    const url = `http://bulksmsbd.net/api/smsapi?api_key=${apiKey}&type=text&number=${phone}&senderid=${senderId}&message=${encodeURIComponent(
+      message
+    )}`;
+
+    const res = await axios.get(url);
+    return res.data;
+  } catch (err) {
+    console.log("SMS Error:", err.message);
+    return null;
+  }
+};
+
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.jwqfj.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -498,21 +516,6 @@ async function run() {
       }
     });
 
-    // app.get("/cart", async (req, res) => {
-    //   const email = req.query.email;
-    //   if (!email) {
-    //     return res.status(400).send({ message: "Email is required" });
-    //   }
-
-    //   try {
-    //     const cartItems = await cartCollection.find({ email }).toArray();
-    //     res.send(cartItems);
-    //   } catch (error) {
-    //     console.error(error);
-    //     res.status(500).send({ message: "Failed to get cart items" });
-    //   }
-    // });
-
     app.get("/cart", async (req, res) => {
       try {
         const email = req.query.email;
@@ -570,55 +573,40 @@ async function run() {
         // save order first
         const result = await ordersCollection.insertOne(order);
 
-        // if courier selected and active
-        if (order.courier) {
-          const courier = await courierCollection.findOne({
-            courierName: order.courier,
-            status: "active",
-          });
-
-          if (courier) {
-            try {
-              // Example Pathao API integration (dummy)
-              const response = await axios.post(
-                `${courier.baseUrl}/aladdin/api/v1/orders`,
-                {
-                  order_id: result.insertedId,
-                  recipient_name: order.customerName,
-                  recipient_phone: order.customerPhone,
-                  recipient_address: order.customerAddress,
-                  amount_to_collect: order.totalPrice,
-                },
-                {
-                  headers: {
-                    Authorization: `Bearer ${courier.apiKey}`,
-                  },
-                }
-              );
-
-              // update order with courier response
-              await ordersCollection.updateOne(
-                { _id: result.insertedId },
-                {
-                  $set: {
-                    courierTrackingId: response.data.tracking_id || null,
-                    courierStatus: "placed",
-                  },
-                }
-              );
-            } catch (err) {
-              console.error("Courier API failed:", err.message);
-              await ordersCollection.updateOne(
-                { _id: result.insertedId },
-                {
-                  $set: {
-                    courierStatus: "failed",
-                    courierError: err.message,
-                  },
-                }
-              );
+        try {
+          const courierCheckRes = await axios.post(
+            "https://bdcourier.com/api/courier-check",
+            {
+              phone: order.phone,
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${process.env.BDCOURIER_API_KEY}`,
+              },
             }
-          }
+          );
+
+          const courierResult = courierCheckRes.data;
+
+          await ordersCollection.updateOne(
+            { _id: result.insertedId },
+            {
+              $set: {
+                courierCheckStatus: "success",
+                courierCheckData: courierResult,
+              },
+            }
+          );
+        } catch (err) {
+          await ordersCollection.updateOne(
+            { _id: result.insertedId },
+            {
+              $set: {
+                courierCheckStatus: "failed",
+                courierCheckData: err.response?.data || err.message,
+              },
+            }
+          );
         }
 
         res.send({ acknowledged: true, insertedId: result.insertedId });
@@ -680,6 +668,28 @@ async function run() {
           { _id: new ObjectId(id) },
           { $set: { status: status } }
         );
+
+        let smsText = "";
+
+        if (status === "processing") {
+          smsText = `Hello ${order.fullName}, your order is now PROCESSING. Order ID: ${order._id}`;
+        }
+        if (status === "shipped") {
+          smsText = `Good news! Your order has been SHIPPED. Tracking will be updated soon.`;
+        }
+        if (status === "delivered") {
+          smsText = `Your order has been DELIVERED successfully. Thank you for ordering from us!`;
+        }
+        if (status === "cancelled") {
+          smsText = `Your order has been CANCELLED. If you didn’t request this, please contact support.`;
+        }
+        if (status === "returned") {
+          smsText = `Your order has been RETURNED successfully.`;
+        }
+
+        if (smsText) {
+          await sendSMS(order.phone, smsText);
+        }
 
         // Adjust stock only if there are cart items
         if (order.cartItems && order.cartItems.length > 0) {
@@ -743,6 +753,153 @@ async function run() {
         res.send({ success: true, message: "Return info updated" });
       } catch (error) {
         console.error("Failed to update return info:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
+    // Assign courier & place order to courier API
+    app.patch("/orders/:id/courier", async (req, res) => {
+      try {
+        const { courierName } = req.body;
+        const id = req.params.id;
+
+        // Fetch order
+        const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+        if (!order)
+          return res
+            .status(404)
+            .send({ success: false, message: "Order not found" });
+
+        // Fetch courier credentials
+        const courier = await courierCollection.findOne({
+          courierName,
+          status: "active",
+        });
+
+        if (!courier)
+          return res.status(400).send({
+            success: false,
+            message: "Courier not active or not found",
+          });
+
+        // Mark order as assigned
+        await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              courier: courierName,
+              courierStatus: "assigned",
+              courierTrackingId: null,
+            },
+          }
+        );
+
+        // Prepare payload based on courier type
+        let payload = {};
+        let apiEndpoint = "";
+
+        if (courierName === "pathao") {
+          apiEndpoint = `${courier.baseUrl}/aladdin/api/v1/orders`;
+          payload = {
+            store_id: courier.storeId,
+            order_id: order._id.toString(),
+            recipient_name: order.fullName,
+            recipient_phone: order.phone,
+            recipient_address: order.address,
+            amount_to_collect: order.total,
+          };
+        }
+
+        if (courierName === "steadfast") {
+          apiEndpoint = `${courier.baseUrl}/order/insert`;
+          payload = {
+            invoice: order._id.toString(),
+            recipient_name: order.fullName,
+            recipient_phone: order.phone,
+            delivery_address: order.address,
+            cod_amount: order.total,
+          };
+        }
+
+        if (courierName === "redx") {
+          apiEndpoint = `${courier.baseUrl}/v1.0.0/orders`;
+          payload = {
+            customer_name: order.fullName,
+            customer_phone: order.phone,
+            customer_address: order.address,
+            order_id: order._id.toString(),
+            payable_amount: order.total,
+          };
+        }
+
+        // Send request
+        let trackingId = null;
+
+        try {
+          const response = await axios.post(apiEndpoint, payload, {
+            headers: {
+              Authorization: `Bearer ${courier.apiKey}`,
+            },
+          });
+
+          // Tracking ID mapping
+          if (courierName === "pathao") trackingId = response.data?.tracking_id;
+          if (courierName === "steadfast")
+            trackingId = response.data?.consignment_id;
+          if (courierName === "redx")
+            trackingId = response.data?.data?.tracking_code;
+
+          // Update order
+          await ordersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { courierStatus: "placed", courierTrackingId: trackingId } }
+          );
+        } catch (err) {
+          console.error("Courier API Failed:", err.message);
+
+          await ordersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { courierStatus: "failed", courierError: err.message } }
+          );
+        }
+
+        res.send({ success: true, message: "Courier assigned & API sent" });
+      } catch (error) {
+        console.error("Assign courier error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
+    // Toggle Courier Status
+    app.patch("/courier/:id/status", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { status } = req.body;
+
+        const courier = await courierCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!courier) {
+          return res
+            .status(404)
+            .send({ success: false, message: "Courier not found" });
+        }
+
+        await courierCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status } }
+        );
+
+        res.send({
+          success: true,
+          message: `Courier status updated to ${status}`,
+        });
+      } catch (error) {
+        console.error(error);
         res
           .status(500)
           .send({ success: false, message: "Internal Server Error" });
@@ -884,6 +1041,7 @@ async function run() {
     app.post("/sslcommerz/init", async (req, res) => {
       try {
         const {
+          tran_id,
           orderId,
           totalAmount,
           fullName,
@@ -896,7 +1054,7 @@ async function run() {
         const data = {
           total_amount: totalAmount,
           currency: "BDT",
-          tran_id: `tran_${Date.now()}`, // must be unique
+          tran_id: tran_id,
           success_url: "http://localhost:5000/sslcommerz/success",
           fail_url: "http://localhost:5000/sslcommerz/fail",
           cancel_url: "http://localhost:5000/sslcommerz/cancel",
@@ -948,24 +1106,12 @@ async function run() {
     });
 
     // Success/Fail/Cancel routes
-    app.all("/sslcommerz/success", async (req, res) => {
+    app.post("/sslcommerz/success", async (req, res) => {
       try {
-        // SSLCommerz might send data in req.body or req.query
         const paymentData = req.body || req.query || {};
-
         console.log("Payment Success:", paymentData);
 
-        // Safely destructure
-        const {
-          tran_id,
-          status,
-          firstname,
-          email,
-          phone,
-          cus_add1,
-          cartItems,
-          amount,
-        } = paymentData;
+        const { tran_id, status, amount } = paymentData;
 
         if (!tran_id) {
           return res
@@ -973,28 +1119,28 @@ async function run() {
             .send("Transaction ID missing from payment data");
         }
 
-        // Prepare order data
-        const orderData = {
-          fullName: firstname || "Customer",
-          email: email || "no-email@example.com",
-          phone: phone || "N/A",
-          address: cus_add1 || "N/A",
-          payment: "online",
-          tran_id,
-          status:
-            status === "VALID" || status === "VALIDATED" ? "paid" : "failed",
-          cartItems: cartItems ? JSON.parse(cartItems) : [],
-          subtotal: amount || 0,
-          shippingCost: 0,
-          discount: 0,
-          total: amount || 0,
-          createdAt: new Date(),
-        };
+        // Update order status
+        if (status === "VALID" || status === "VALIDATED") {
+          await ordersCollection.updateOne(
+            { tran_id },
+            {
+              $set: {
+                paymentStatus: "paid",
+                status: "pending",
+                total: amount || 0,
+                payment: "online",
+                paidAt: new Date(),
+              },
+            }
+          );
+        } else {
+          await ordersCollection.updateOne(
+            { tran_id },
+            { $set: { paymentStatus: "failed" } }
+          );
+        }
 
-        // Save to DB
-        await ordersCollection.insertOne(orderData);
-
-        // Redirect to frontend success page
+        // Redirect frontend to success page
         res.redirect(
           `http://localhost:5173/payment-success?tran_id=${tran_id}`
         );
@@ -1004,13 +1150,21 @@ async function run() {
       }
     });
 
-    app.post("/sslcommerz/fail", (req, res) => {
-      console.log("Payment Failed:", req.body);
+    app.post("/sslcommerz/fail", async (req, res) => {
+      const { tran_id } = req.body;
+      await ordersCollection.updateOne(
+        { tran_id },
+        { $set: { paymentStatus: "failed" } }
+      );
       res.redirect("http://localhost:5173/payment-fail");
     });
 
-    app.post("/sslcommerz/cancel", (req, res) => {
-      console.log("Payment Cancelled:", req.body);
+    app.post("/sslcommerz/cancel", async (req, res) => {
+      const { tran_id } = req.body;
+      await ordersCollection.updateOne(
+        { tran_id },
+        { $set: { paymentStatus: "cancelled" } }
+      );
       res.redirect("http://localhost:5173/payment-cancel");
     });
 
@@ -1891,148 +2045,6 @@ async function run() {
           .toArray();
 
         res.send(couriers);
-      } catch (error) {
-        console.error(error);
-        res
-          .status(500)
-          .send({ success: false, message: "Internal Server Error" });
-      }
-    });
-
-    // Assign courier & place order to courier API
-    app.patch("/orders/:id/courier", async (req, res) => {
-    try {
-      const { courierName } = req.body;
-      const id = req.params.id;
-
-      // Fetch order
-      const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
-      if (!order) return res.status(404).send({ success: false, message: "Order not found" });
-
-      // Fetch courier credentials
-      const courier = await courierCollection.findOne({
-        courierName,
-        status: "active",
-      });
-
-      if (!courier)
-        return res.status(400).send({
-          success: false,
-          message: "Courier not active or not found",
-        });
-
-      // Mark order as assigned
-      await ordersCollection.updateOne(
-        { _id: new ObjectId(id) },
-        {
-          $set: {
-            courier: courierName,
-            courierStatus: "assigned",
-            courierTrackingId: null,
-          },
-        }
-      );
-
-      // Prepare payload based on courier type
-      let payload = {};
-      let apiEndpoint = "";
-
-      if (courierName === "pathao") {
-        apiEndpoint = `${courier.baseUrl}/aladdin/api/v1/orders`;
-        payload = {
-          store_id: courier.storeId,
-          order_id: order._id.toString(),
-          recipient_name: order.fullName,
-          recipient_phone: order.phone,
-          recipient_address: order.address,
-          amount_to_collect: order.total,
-        };
-      }
-
-      if (courierName === "steadfast") {
-        apiEndpoint = `${courier.baseUrl}/order/insert`;
-        payload = {
-          invoice: order._id.toString(),
-          recipient_name: order.fullName,
-          recipient_phone: order.phone,
-          delivery_address: order.address,
-          cod_amount: order.total,
-        };
-      }
-
-      if (courierName === "redx") {
-        apiEndpoint = `${courier.baseUrl}/v1.0.0/orders`;
-        payload = {
-          customer_name: order.fullName,
-          customer_phone: order.phone,
-          customer_address: order.address,
-          order_id: order._id.toString(),
-          payable_amount: order.total,
-        };
-      }
-
-      // Send request
-      let trackingId = null;
-
-      try {
-        const response = await axios.post(apiEndpoint, payload, {
-          headers: {
-            Authorization: `Bearer ${courier.apiKey}`,
-          },
-        });
-
-        // Tracking ID mapping
-        if (courierName === "pathao") trackingId = response.data?.tracking_id;
-        if (courierName === "steadfast") trackingId = response.data?.consignment_id;
-        if (courierName === "redx") trackingId = response.data?.data?.tracking_code;
-
-        // Update order
-        await ordersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { courierStatus: "placed", courierTrackingId: trackingId } }
-        );
-
-      } catch (err) {
-        console.error("Courier API Failed:", err.message);
-
-        await ordersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { courierStatus: "failed", courierError: err.message } }
-        );
-      }
-
-      res.send({ success: true, message: "Courier assigned & API sent" });
-
-    } catch (error) {
-      console.error("Assign courier error:", error);
-      res.status(500).send({ success: false, message: "Internal Server Error" });
-    }
-  });
-
-    // Toggle Courier Status
-    app.patch("/courier/:id/status", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const { status } = req.body;
-
-        const courier = await courierCollection.findOne({
-          _id: new ObjectId(id),
-        });
-        if (!courier) {
-          return res
-            .status(404)
-            .send({ success: false, message: "Courier not found" });
-        }
-
-        await courierCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { status } }
-        );
-
-        res.send({
-          success: true,
-          message: `Courier status updated to ${status}`,
-        });
       } catch (error) {
         console.error(error);
         res
