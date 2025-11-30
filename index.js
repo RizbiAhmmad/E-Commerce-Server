@@ -75,6 +75,7 @@ async function run() {
     const whisperCollection = database.collection("wispers");
     const policiesCollection = database.collection("policies");
     const landingPagesCollection = database.collection("landing_pages");
+    const shippingCollection = database.collection("shipping");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -2328,6 +2329,41 @@ async function run() {
         console.error(err);
         res.status(500).send({ error: "Failed to delete landing page" });
       }
+    });
+
+    app.post("/shipping", async (req, res) => {
+      try {
+        const { insideDhaka, outsideDhaka } = req.body;
+
+        const filter = {};
+        const updateDoc = {
+          $set: {
+            insideDhaka: Number(insideDhaka),
+            outsideDhaka: Number(outsideDhaka),
+          },
+        };
+
+        const options = { upsert: true };
+
+        const result = await shippingCollection.updateOne(
+          filter,
+          updateDoc,
+          options
+        );
+
+        res.send({
+          success: true,
+          message: "Shipping settings updated",
+          result,
+        });
+      } catch (error) {
+        res.status(500).send({ success: false, message: error.message });
+      }
+    });
+
+    app.get("/shipping", async (req, res) => {
+      const shipping = await shippingCollection.findOne({});
+      res.send(shipping);
     });
 
     // await client.db("admin").command({ ping: 1 });
