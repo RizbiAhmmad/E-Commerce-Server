@@ -39,34 +39,23 @@ const is_live = false; // Sandbox mode
 
 const sendSMS = async (phone, message) => {
   try {
-    // Format phone
-    phone = phone.toString().replace(/\D/g, "");
-    if (phone.startsWith("0")) phone = "88" + phone;
-    if (!phone.startsWith("88")) phone = "88" + phone;
+    const apiKey = process.env.REVE_API_KEY;
+    const secretKey = process.env.REVE_SECRET_KEY;
+    const senderId = process.env.REVE_SENDER_ID;
 
-    const url = "https://smpp.revesms.com/httpapi/send_sms";
+    const url = `https://smpp.revesms.com:7790/sendtext?apikey=${apiKey}&secretkey=${secretKey}&callerID=${encodeURIComponent(
+      senderId
+    )}&toUser=${phone}&messageContent=${encodeURIComponent(message)}`;
 
-    const payload = {
-      apikey: process.env.REVE_API_KEY,
-      secretkey: process.env.REVE_SECRET_KEY,
-      callerID: process.env.REVE_SENDER_ID,
-      toUser: phone,
-      messageContent: message,
-    };
+    // console.log("REVE FINAL URL:", url);
 
-    console.log("📨 Sending SMS via ReveSMS:", payload);
+    const res = await axios.get(url);
 
-    const res = await axios.post(url, payload, {
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    console.log("✅ ReveSMS Response:", res.data);
+    // console.log("REVE API RESPONSE:", res.data);
 
     return res.data;
   } catch (err) {
-    console.error("❌ ReveSMS Error:", err.response?.data || err.message);
+    console.error("REVE SMS Error:", err.message);
     return null;
   }
 };
@@ -518,7 +507,7 @@ async function run() {
         const result = await reviewsCollection.insertOne(review);
 
         if (result.acknowledged) {
-          review._id = result.insertedId; 
+          review._id = result.insertedId;
           res.send({ acknowledged: true, review });
         } else {
           res
@@ -559,7 +548,7 @@ async function run() {
 
     app.post("/cart", async (req, res) => {
       try {
-        const cartItem = req.body; // name, email, productId, quantity, etc.
+        const cartItem = req.body;
         const result = await cartCollection.insertOne(cartItem);
         res.send(result);
       } catch (error) {
@@ -571,7 +560,7 @@ async function run() {
     app.get("/cart", async (req, res) => {
       try {
         const email = req.query.email;
-        const query = email ? { email } : {}; // email thakle filter, na thakle sob
+        const query = email ? { email } : {};
         const cartItems = await cartCollection.find(query).toArray();
         res.send(cartItems);
       } catch (error) {
@@ -621,16 +610,34 @@ async function run() {
       try {
         const order = req.body;
         order.createdAt = new Date();
+        order.status = "pending";
 
-        // save order first
         const result = await ordersCollection.insertOne(order);
+
+        try {
+          const fullName = order.fullName || "Customer";
+
+          const smsText = `Hello ${fullName}, your order has been received!\nOrder ID: ${result.insertedId}. We will start processing soon. Thank you for shopping with us.`;
+
+          let phone = order.phone?.toString().replace(/\D/g, "") || "";
+
+          if (phone.startsWith("0")) phone = "88" + phone;
+          else if (!phone.startsWith("88")) phone = "88" + phone;
+
+          // console.log(" Sending Pending SMS to:", phone);
+
+          // Send SMS via ReveSMS
+          await sendSMS(phone, smsText);
+
+          // console.log(" Pending Order SMS Sent Successfully!");
+        } catch (smsErr) {
+          console.error("❌ Pending SMS sending failed:", smsErr.message);
+        }
 
         try {
           const courierCheckRes = await axios.post(
             "https://bdcourier.com/api/courier-check",
-            {
-              phone: order.phone,
-            },
+            { phone: order.phone },
             {
               headers: {
                 Authorization: `Bearer ${process.env.BDCOURIER_API_KEY}`,
@@ -754,12 +761,12 @@ async function run() {
 
     // Update order status & adjust stock
     app.patch("/orders/:id/status", async (req, res) => {
-      console.log("🚀 ORDER STATUS API HIT");
+      // console.log("🚀 ORDER STATUS API HIT");
+
       try {
         const { status } = req.body;
         const id = req.params.id;
 
-        // Find the order
         const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
         if (!order) {
           return res
@@ -767,9 +774,6 @@ async function run() {
             .send({ success: false, message: "Order not found" });
         }
 
-        const prevStatus = order.status || "pending";
-
-        // Update order status
         await ordersCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: { status: status } }
@@ -777,52 +781,43 @@ async function run() {
 
         let smsText = "";
 
+        //  Beautiful SMS Texts
         if (status === "processing") {
-          smsText = `Hello ${order.fullName}, your order is now PROCESSING. Order ID: ${order._id}`;
+          smsText = `Hi ${order.fullName}, great news! Your order (ID: ${order._id}) is now being processed.`;
         }
         if (status === "shipped") {
-          smsText = `Good news! Your order has been SHIPPED. Tracking will be updated soon.`;
+          smsText = `Hi ${order.fullName}, great news! Your order (ID: ${order._id}) has been shipped! Our delivery team will contact you soon.`;
         }
         if (status === "delivered") {
-          smsText = `Your order has been DELIVERED successfully. Thank you for ordering from us!`;
+          smsText = `Hi ${order.fullName}, great news! Your order (ID: ${order._id}) has been delivered successfully! Thank you for shopping with us ❤️`;
         }
         if (status === "cancelled") {
-          smsText = `Your order has been CANCELLED. If you didn’t request this, please contact support.`;
+          smsText = `Hi ${order.fullName}, great news! Your order (ID: ${order._id}) has been cancelled. If this wasn’t you, please contact support.`;
         }
         if (status === "returned") {
-          smsText = `Your order has been RETURNED successfully.`;
+          smsText = `Hi ${order.fullName}, great news! Your order (ID: ${order._id}) has been returned successfully.`;
         }
 
         if (smsText) {
-          console.log("📨 SMS READY TO SEND:", smsText);
           let phone = order.phone?.toString().replace(/\D/g, "") || "";
-          console.log("📞 RAW PHONE:", order.phone);
-          console.log("📞 FORMATTED PHONE:", phone);
-          if (phone.startsWith("0")) {
-            phone = "88" + phone;
-          } else if (!phone.startsWith("88")) {
-            phone = "88" + phone;
-          }
+
+          if (phone.startsWith("0")) phone = "88" + phone;
+          else if (!phone.startsWith("88")) phone = "88" + phone;
 
           await sendSMS(phone, smsText);
         }
 
-        // Adjust stock only if there are cart items
         if (order.cartItems && order.cartItems.length > 0) {
           for (const item of order.cartItems) {
             const productId = new ObjectId(item.productId);
             const qty = Number(item.quantity);
 
-            // Reduce stock if status changed to delivered from non-delivered
             if (status === "delivered" && prevStatus !== "delivered") {
               await productsCollection.updateOne(
                 { _id: productId },
                 { $inc: { stock: -qty } }
               );
-            }
-
-            // Increase stock if status changed from delivered to returned
-            else if (status === "returned" && prevStatus === "delivered") {
+            } else if (status === "returned" && prevStatus === "delivered") {
               await productsCollection.updateOne(
                 { _id: productId },
                 { $inc: { stock: qty } }
@@ -838,7 +833,7 @@ async function run() {
 
         res.send({
           success: true,
-          message: "Order status updated and stock adjusted accordingly",
+          message: "Order status updated & SMS sent successfully",
         });
       } catch (error) {
         console.error("Failed to update order status:", error);
@@ -1343,10 +1338,10 @@ async function run() {
         order.status = "paid";
         order.createdAt = new Date();
 
-        // 1. Save order
+        // Save order
         const result = await posOrdersCollection.insertOne(order);
 
-        // 2. Update stock for each product
+        // Update stock
         for (const item of order.cartItems) {
           await productsCollection.updateOne(
             { _id: new ObjectId(item.productId) },
@@ -1354,7 +1349,23 @@ async function run() {
           );
         }
 
-        // 3. Clear POS cart
+        // Send SMS
+        try {
+          const fullName = order.customer?.name || "Customer";
+          const smsText = `Hello ${fullName}, your POS order has been confirmed!\nOrder ID: ${result.insertedId}. Thank you for shopping with us.`;
+
+          let phone =
+            order.customer?.phone?.toString().replace(/\D/g, "") || "";
+          if (phone.startsWith("0")) phone = "88" + phone;
+          else if (!phone.startsWith("88")) phone = "88" + phone;
+
+          await sendSMS(phone, smsText);
+          // console.log("✅ POS Order SMS sent successfully!");
+        } catch (smsErr) {
+          console.error("❌ POS SMS sending failed:", smsErr.message);
+        }
+
+        // Clear POS cart
         await posCartCollection.deleteMany({});
 
         res.send({ success: true, insertedId: result.insertedId });
@@ -1388,6 +1399,42 @@ async function run() {
       } catch (error) {
         console.error("Error deleting order:", error);
         res.status(500).send({ message: "Failed to delete order" });
+      }
+    });
+
+    // Return POS order
+    app.patch("/pos/orders/:id/return", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const order = await posOrdersCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!order) return res.status(404).send({ message: "Order not found" });
+        if (order.isReturned)
+          return res.status(400).send({ message: "Order already returned" });
+
+        // Update stock: add back each product
+        for (const item of order.cartItems) {
+          await productsCollection.updateOne(
+            { _id: new ObjectId(item.productId) },
+            { $inc: { stock: Number(item.quantity) } }
+          );
+        }
+
+        // Mark order as returned
+        await posOrdersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isReturned: true, returnedAt: new Date() } }
+        );
+
+        res.send({
+          success: true,
+          message: "Order returned and stock updated",
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to return order" });
       }
     });
 
