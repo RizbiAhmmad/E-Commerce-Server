@@ -874,15 +874,31 @@ async function run() {
     // Assign courier & place order to courier API
     app.patch("/orders/:id/courier", async (req, res) => {
       try {
-        const { courierName } = req.body;
+        const {
+          courierName,
+          deliveryType,
+          itemType,
+          itemQuantity,
+          itemWeight,
+        } = req.body;
         const id = req.params.id;
+
+        // console.log("PATCH /orders/:id/courier called", {
+        //   id,
+        //   courierName,
+        //   deliveryType,
+        //   itemType,
+        //   itemQuantity,
+        //   itemWeight,
+        // });
 
         // Fetch order
         const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
         if (!order)
-          return res
-            .status(404)
-            .send({ success: false, message: "Order not found" });
+          return res.status(404).send({
+            success: false,
+            message: "Order not found",
+          });
 
         // Fetch courier credentials
         const courier = await courierCollection.findOne({
@@ -896,36 +912,133 @@ async function run() {
             message: "Courier not active or not found",
           });
 
-        // Mark order as assigned
+        // console.log("Order and courier found", { order, courier });
+
+        // Mark as assigning
         await ordersCollection.updateOne(
           { _id: new ObjectId(id) },
           {
             $set: {
               courier: courierName,
-              courierStatus: "assigned",
+              deliveryType: Number(deliveryType),
+              itemType: Number(itemType),
+              itemQuantity: Number(itemQuantity),
+              itemWeight: Number(itemWeight),
+              courierStatus: "assigning",
               courierTrackingId: null,
             },
           }
         );
+        // console.log("Order updated as assigning");
 
-        // Prepare payload based on courier type
-        let payload = {};
         let apiEndpoint = "";
+        let payload = {};
+        let trackingId = null;
+        let recipientPhone = order.phone;
+
+        if (recipientPhone.startsWith("880")) {
+          recipientPhone = "0" + recipientPhone.slice(3);
+        } else if (!recipientPhone.startsWith("0")) {
+          recipientPhone = "0" + recipientPhone;
+        }
+
+        const getPathaoToken = async () => {
+          const tokenRes = await axios.post(
+            `${courier.baseUrl}/aladdin/api/v1/issue-token`,
+
+            {
+              client_id: courier.clientId,
+              client_secret: courier.clientSecret,
+              username: courier.username,
+              password: courier.password,
+              grant_type: "password",
+            }
+          );
+          // console.log("Token received:", tokenRes.data);
+          return tokenRes.data.access_token;
+        };
 
         if (courierName === "pathao") {
+          const accessToken = await getPathaoToken();
+
           apiEndpoint = `${courier.baseUrl}/aladdin/api/v1/orders`;
+
           payload = {
-            store_id: courier.storeId,
-            order_id: order._id.toString(),
+            store_id: parseInt(courier.storeId),
+            merchant_order_id: order._id.toString(),
             recipient_name: order.fullName,
-            recipient_phone: order.phone,
+            recipient_phone: recipientPhone,
             recipient_address: order.address,
-            amount_to_collect: order.total,
+            delivery_type: parseInt(order.deliveryType || 48),
+            item_type: parseInt(order.itemType || 2),
+            special_instruction: order.specialInstruction || "",
+            item_quantity: parseInt(order.itemQuantity || 1),
+            item_weight: parseFloat(order.itemWeight || 0.5),
+            item_description: Array.isArray(order.cartItems)
+              ? order.cartItems
+                  .map((item) => `${item.productName}, price-${item.price}`)
+                  .join("; ")
+              : "",
+            amount_to_collect: parseInt(order.total || 0),
           };
+
+          // console.log("Pathao payload prepared:", payload);
+
+          try {
+            const resAPI = await axios.post(apiEndpoint, payload, {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+              },
+            });
+            // console.log("Pathao API response:", resAPI.data);
+
+            trackingId =
+              resAPI.data?.data?.consignment_id ||
+              resAPI.data?.tracking_id ||
+              null;
+
+            await ordersCollection.updateOne(
+              { _id: new ObjectId(id) },
+              {
+                $set: {
+                  courier: courierName,
+      courierStatus: "placed",
+      courierTrackingId: trackingId,
+      status: "shipped",
+      shippedAt: new Date(),
+                },
+              }
+            );
+            // console.log("Tracking ID:", trackingId);
+
+            return res.send({
+              success: true,
+              message: "Pathao assigned successfully",
+              trackingId,
+            });
+          } catch (err) {
+            console.error("PATHAO ERROR:", err.response?.data || err.message);
+
+            await ordersCollection.updateOne(
+              { _id: new ObjectId(id) },
+              {
+                $set: {
+                  courierStatus: "failed",
+                  courierError: err.response?.data || err.message,
+                },
+              }
+            );
+
+            return res.send({
+              success: false,
+              message: "Pathao API failed",
+            });
+          }
         }
 
         if (courierName === "steadfast") {
           apiEndpoint = `${courier.baseUrl}/order/insert`;
+
           payload = {
             invoice: order._id.toString(),
             recipient_name: order.fullName,
@@ -933,10 +1046,51 @@ async function run() {
             delivery_address: order.address,
             cod_amount: order.total,
           };
+
+          try {
+            const resAPI = await axios.post(apiEndpoint, payload, {
+              headers: {
+                apiKey: courier.apiKey,
+              },
+            });
+
+            trackingId = resAPI.data?.consignment_id;
+
+            await ordersCollection.updateOne(
+              { _id: new ObjectId(id) },
+              {
+                $set: {
+                  courierStatus: "placed",
+                  courierTrackingId: trackingId,
+                },
+              }
+            );
+
+            return res.send({
+              success: true,
+              message: "Steadfast Assigned Successfully",
+            });
+          } catch (err) {
+            await ordersCollection.updateOne(
+              { _id: new ObjectId(id) },
+              {
+                $set: {
+                  courierStatus: "failed",
+                  courierError: err.response?.data || err.message,
+                },
+              }
+            );
+
+            return res.send({
+              success: false,
+              message: "Steadfast API failed",
+            });
+          }
         }
 
         if (courierName === "redx") {
           apiEndpoint = `${courier.baseUrl}/v1.0.0/orders`;
+
           payload = {
             customer_name: order.fullName,
             customer_phone: order.phone,
@@ -944,45 +1098,53 @@ async function run() {
             order_id: order._id.toString(),
             payable_amount: order.total,
           };
+
+          try {
+            const resAPI = await axios.post(apiEndpoint, payload, {
+              headers: {
+                "API-KEY": courier.apiKey,
+              },
+            });
+
+            trackingId = resAPI.data?.data?.tracking_code;
+
+            await ordersCollection.updateOne(
+              { _id: new ObjectId(id) },
+              {
+                $set: {
+                  courierStatus: "placed",
+                  courierTrackingId: trackingId,
+                },
+              }
+            );
+
+            return res.send({
+              success: true,
+              message: "REDX Assigned Successfully",
+            });
+          } catch (err) {
+            await ordersCollection.updateOne(
+              { _id: new ObjectId(id) },
+              {
+                $set: {
+                  courierStatus: "failed",
+                  courierError: err.response?.data || err.message,
+                },
+              }
+            );
+
+            return res.send({
+              success: false,
+              message: "REDX API failed",
+            });
+          }
         }
-
-        // Send request
-        let trackingId = null;
-
-        try {
-          const response = await axios.post(apiEndpoint, payload, {
-            headers: {
-              Authorization: `Bearer ${courier.apiKey}`,
-            },
-          });
-
-          // Tracking ID mapping
-          if (courierName === "pathao") trackingId = response.data?.tracking_id;
-          if (courierName === "steadfast")
-            trackingId = response.data?.consignment_id;
-          if (courierName === "redx")
-            trackingId = response.data?.data?.tracking_code;
-
-          // Update order
-          await ordersCollection.updateOne(
-            { _id: new ObjectId(id) },
-            { $set: { courierStatus: "placed", courierTrackingId: trackingId } }
-          );
-        } catch (err) {
-          console.error("Courier API Failed:", err.message);
-
-          await ordersCollection.updateOne(
-            { _id: new ObjectId(id) },
-            { $set: { courierStatus: "failed", courierError: err.message } }
-          );
-        }
-
-        res.send({ success: true, message: "Courier assigned & API sent" });
       } catch (error) {
-        console.error("Assign courier error:", error);
-        res
-          .status(500)
-          .send({ success: false, message: "Internal Server Error" });
+        console.error(error);
+        res.status(500).send({
+          success: false,
+          message: "Internal Server Error",
+        });
       }
     });
 
