@@ -762,7 +762,7 @@ async function run() {
 
     // Update order status & adjust stock
     app.patch("/orders/:id/status", async (req, res) => {
-      // console.log("🚀 ORDER STATUS API HIT");
+      // console.log(" ORDER STATUS API HIT");
 
       try {
         const { status } = req.body;
@@ -774,6 +774,7 @@ async function run() {
             .status(404)
             .send({ success: false, message: "Order not found" });
         }
+        const prevStatus = order.status;
 
         await ordersCollection.updateOne(
           { _id: new ObjectId(id) },
@@ -1002,10 +1003,10 @@ async function run() {
               {
                 $set: {
                   courier: courierName,
-      courierStatus: "placed",
-      courierTrackingId: trackingId,
-      status: "shipped",
-      shippedAt: new Date(),
+                  courierStatus: "placed",
+                  courierTrackingId: trackingId,
+                  status: "shipped",
+                  shippedAt: new Date(),
                 },
               }
             );
@@ -1250,60 +1251,62 @@ async function run() {
 
     app.post("/apply-coupon", async (req, res) => {
       try {
-        const codeRaw = req.body.code;
-        const totalAmount = Number(req.body.totalAmount) || 0;
+        const {
+          code,
+          cartProductIds = [],
+          cartItems = [],
+          productsMap = {},
+        } = req.body;
 
-        if (!codeRaw) {
+        if (!code) {
           return res.status(400).send({ message: "Coupon code is required" });
         }
 
-        // use exactly as stored
-        const code = codeRaw.trim();
-
         const coupon = await couponsCollection.findOne({
-          code,
+          code: code.trim(),
           status: "active",
         });
+
         if (!coupon) {
           return res
             .status(404)
             .send({ message: "Invalid or inactive coupon" });
         }
 
-        const now = new Date();
+        const eligibleProductIds = (coupon.productIds || []).map(String);
 
-        if (coupon.startDate && new Date(coupon.startDate) > now) {
-          return res.status(400).send({ message: "Coupon is not active yet" });
+        const eligibleItems = cartItems.filter((item) =>
+          eligibleProductIds.includes(String(item.productId))
+        );
+
+        if (eligibleItems.length === 0) {
+          return res.status(400).send({
+            message: "This coupon is not applicable to selected products",
+          });
         }
 
-        if (coupon.expiryDate && new Date(coupon.expiryDate) < now) {
-          return res.status(400).send({ message: "Coupon has expired" });
-        }
+        //  eligible subtotal
+        let eligibleSubtotal = 0;
 
-        const minReq = Number(coupon.minOrderAmount) || 0;
-        if (minReq && totalAmount < minReq) {
-          return res
-            .status(400)
-            .send({ message: `Minimum order amount is ${minReq}` });
-        }
+        eligibleItems.forEach((item) => {
+          const product = productsMap[item.productId];
+          eligibleSubtotal += (product?.newPrice || 0) * item.quantity;
+        });
 
         let discount = 0;
         if (coupon.discountType === "percentage") {
-          discount = (totalAmount * Number(coupon.discountValue || 0)) / 100;
-        } else if (coupon.discountType === "fixed") {
+          discount =
+            (eligibleSubtotal * Number(coupon.discountValue || 0)) / 100;
+        } else {
           discount = Number(coupon.discountValue || 0);
         }
 
-        if (discount < 0) discount = 0;
-        if (discount > totalAmount) discount = totalAmount;
-
-        const finalAmount = Math.max(totalAmount - discount, 0);
+        if (discount > eligibleSubtotal) discount = eligibleSubtotal;
 
         return res.send({
           success: true,
           code: coupon.code,
           discount: Math.round(discount),
-          finalAmount,
           message: "Coupon applied successfully",
         });
       } catch (error) {
@@ -1646,39 +1649,36 @@ async function run() {
 
     app.get("/sales-report", async (req, res) => {
       try {
+        // Online orders (delivered only)
         const deliveredOrders = (
           await ordersCollection.find({ status: "delivered" }).toArray()
         ).map((o) => ({
           ...o,
           orderType: "Online",
           cartItems: o.cartItems || [],
-          createdAt: o.createdAt || o.date || new Date(),
+          createdAt: o.createdAt || o.orderDate || o.date,
         }));
 
+        // POS orders
         const posOrders = (await posOrdersCollection.find().toArray()).map(
           (o) => ({
             ...o,
             orderType: "POS",
             cartItems: o.cartItems || [],
-            createdAt: o.createdAt || o.date || new Date(),
+            createdAt: o.createdAt || o.orderDate || o.date,
           })
         );
 
         // Combine all
-        const allOrders = [...deliveredOrders, ...posOrders].map((order) => ({
-          ...order,
-          products: order.cartItems || [],
-          total: order.totalPrice || order.total || 0,
-          orderType: order.orderType,
-        }));
-
-        const calcTotal = (orders) =>
-          orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+        const allOrders = [...deliveredOrders, ...posOrders];
 
         const filterByDate = (orders, period) => {
           const now = new Date();
+
           return orders.filter((order) => {
             const orderDate = new Date(order.createdAt);
+            if (isNaN(orderDate)) return false;
+
             if (period === "today") {
               return orderDate.toDateString() === now.toDateString();
             } else if (period === "yesterday") {
@@ -1701,25 +1701,36 @@ async function run() {
                 orderDate.getFullYear() === now.getFullYear()
               );
             } else if (period === "lastMonth") {
-              const month = now.getMonth() - 1;
-              const year = now.getFullYear();
+              const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
               return (
-                orderDate.getMonth() === month &&
-                orderDate.getFullYear() === year
+                orderDate.getMonth() === d.getMonth() &&
+                orderDate.getFullYear() === d.getFullYear()
               );
             }
             return true;
           });
         };
 
+        const calcSales = (orders) => {
+          let sales = 0;
+
+          orders.forEach((order) => {
+            (order.cartItems || []).forEach((p) => {
+              sales += Number(p.price || 0) * Number(p.quantity || 0);
+            });
+          });
+
+          return sales;
+        };
+
         res.send({
-          allTime: calcTotal(allOrders),
-          thisMonth: calcTotal(filterByDate(allOrders, "month")),
-          lastMonth: calcTotal(filterByDate(allOrders, "lastMonth")),
-          thisWeek: calcTotal(filterByDate(allOrders, "week")),
-          lastWeek: calcTotal(filterByDate(allOrders, "lastWeek")),
-          today: calcTotal(filterByDate(allOrders, "today")),
-          yesterday: calcTotal(filterByDate(allOrders, "yesterday")),
+          allTime: calcSales(allOrders),
+          thisMonth: calcSales(filterByDate(allOrders, "month")),
+          lastMonth: calcSales(filterByDate(allOrders, "lastMonth")),
+          thisWeek: calcSales(filterByDate(allOrders, "week")),
+          lastWeek: calcSales(filterByDate(allOrders, "lastWeek")),
+          today: calcSales(filterByDate(allOrders, "today")),
+          yesterday: calcSales(filterByDate(allOrders, "yesterday")),
           allOrders,
         });
       } catch (error) {
