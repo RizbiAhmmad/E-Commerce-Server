@@ -881,6 +881,7 @@ async function run() {
           itemType,
           itemQuantity,
           itemWeight,
+          specialInstruction,
         } = req.body;
         const id = req.params.id;
 
@@ -925,6 +926,7 @@ async function run() {
               itemType: Number(itemType),
               itemQuantity: Number(itemQuantity),
               itemWeight: Number(itemWeight),
+              specialInstruction: specialInstruction || "", 
               courierStatus: "assigning",
               courierTrackingId: null,
             },
@@ -1607,43 +1609,196 @@ async function run() {
     // Assign courier to POS order
     app.patch("/pos/orders/:id/courier", async (req, res) => {
       try {
-        const id = req.params.id;
-        const { courierName } = req.body;
+        const {
+          courierName,
+          deliveryType,
+          itemType,
+          itemQuantity,
+          itemWeight,
+          specialInstruction,
+        } = req.body;
 
-        if (!courierName) {
+        const id = req.params.id;
+
+        const order = await posOrdersCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!order) {
+          return res.send({ success: false, message: "POS Order not found" });
+        }
+
+        const courier = await courierCollection.findOne({
+          courierName,
+          status: "active",
+        });
+
+        if (!courier) {
           return res.send({
             success: false,
-            message: "Courier name is required",
+            message: "Courier not active or not found",
           });
         }
 
-        const result = await posOrdersCollection.updateOne(
+        // Save assigning state
+        await posOrdersCollection.updateOne(
           { _id: new ObjectId(id) },
           {
             $set: {
               courier: courierName,
-              courierStatus: "assigned",
-              courierAssignedAt: new Date(),
+              deliveryType: Number(deliveryType),
+              itemType: Number(itemType),
+              itemQuantity: Number(itemQuantity),
+              itemWeight: Number(itemWeight),
+              courierStatus: "assigning",
+              courierTrackingId: null,
             },
           }
         );
 
-        if (result.modifiedCount > 0) {
-          return res.send({
-            success: true,
-            message: "Courier assigned successfully",
-          });
-        } else {
-          return res.send({
-            success: false,
-            message: "Order not found or already updated",
-          });
+        let trackingId = null;
+
+        // Phone normalize
+        let phone = order.customer?.phone?.toString() || "";
+        phone = phone.replace(/\D/g, "");
+        if (phone.startsWith("880")) phone = "0" + phone.slice(3);
+        else if (!phone.startsWith("0")) phone = "0" + phone;
+
+        if (courierName === "pathao") {
+          const tokenRes = await axios.post(
+            `${courier.baseUrl}/aladdin/api/v1/issue-token`,
+            {
+              client_id: courier.clientId,
+              client_secret: courier.clientSecret,
+              username: courier.username,
+              password: courier.password,
+              grant_type: "password",
+            }
+          );
+
+          const accessToken = tokenRes.data.access_token;
+
+          const payload = {
+            store_id: parseInt(courier.storeId),
+            merchant_order_id: order._id.toString(),
+            recipient_name: order.customer?.name,
+            recipient_phone: phone,
+            recipient_address: order.customer?.address,
+            delivery_type: Number(deliveryType || 48),
+            item_type: Number(itemType || 2),
+            item_quantity: Number(itemQuantity || 1),
+            item_weight: Number(itemWeight || 0.5),
+            special_instruction: specialInstruction || "",
+            item_description: order.cartItems
+              ?.map((i) => `${i.productName} x ${i.quantity}`)
+              .join(", "),
+            amount_to_collect: order.total,
+          };
+
+          const resAPI = await axios.post(
+            `${courier.baseUrl}/aladdin/api/v1/orders`,
+            payload,
+            {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            }
+          );
+
+          trackingId =
+            resAPI.data?.data?.consignment_id ||
+            resAPI.data?.tracking_id ||
+            null;
         }
+
+        if (courierName === "steadfast") {
+          const payload = {
+            invoice: order._id.toString(),
+            recipient_name: order.customer?.name,
+            recipient_phone: phone,
+            delivery_address: order.customer?.address,
+            cod_amount: order.total,
+          };
+
+          const resAPI = await axios.post(
+            `${courier.baseUrl}/order/insert`,
+            payload,
+            {
+              headers: { apiKey: courier.apiKey },
+            }
+          );
+
+          trackingId = resAPI.data?.consignment_id;
+        }
+
+        if (courierName === "redx") {
+          const payload = {
+            customer_name: order.customer?.name,
+            customer_phone: phone,
+            customer_address: order.customer?.address,
+            order_id: order._id.toString(),
+            payable_amount: order.total,
+          };
+
+          const resAPI = await axios.post(
+            `${courier.baseUrl}/v1.0.0/orders`,
+            payload,
+            {
+              headers: { "API-KEY": courier.apiKey },
+            }
+          );
+
+          trackingId = resAPI.data?.data?.tracking_code;
+        }
+
+        await posOrdersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              courierStatus: "placed",
+              courierTrackingId: trackingId,
+              status: "shipped",
+              specialInstruction,
+              shippedAt: new Date(),
+            },
+          }
+        );
+
+        try {
+          const customerName = order.customer?.name || "Customer";
+
+          let smsText = `Hi ${customerName}, your order (ID: ${
+            order._id
+          }) has been shipped via ${courierName.toUpperCase()}.`;
+
+          if (trackingId) {
+            smsText += ` Tracking ID: ${trackingId}.`;
+          }
+
+          smsText += ` Thank you for shopping with us ❤️`;
+
+          let smsPhone = order.customer?.phone?.toString() || "";
+          smsPhone = smsPhone.replace(/\D/g, "");
+
+          if (smsPhone.startsWith("0")) smsPhone = "88" + smsPhone;
+          else if (!smsPhone.startsWith("88")) smsPhone = "88" + smsPhone;
+
+          await sendSMS(smsPhone, smsText);
+
+          console.log("✅ POS courier SMS sent");
+        } catch (smsErr) {
+          console.error("❌ POS courier SMS failed:", smsErr.message);
+        }
+
+        res.send({
+          success: true,
+          message: "POS order courier placed successfully",
+          trackingId,
+        });
       } catch (error) {
         console.error(error);
-        res
-          .status(500)
-          .send({ success: false, message: "Failed to assign courier" });
+        res.send({
+          success: false,
+          message: "Courier placement failed",
+        });
       }
     });
 
