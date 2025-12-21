@@ -155,6 +155,25 @@ async function run() {
       res.send(result);
     });
 
+    // Update user profile (name, image, address)
+    app.patch("/users/profile/:email", async (req, res) => {
+      const email = req.params.email;
+      const { name, photoURL, address } = req.body;
+
+      const query = { email };
+      const updateDoc = {
+        $set: {
+          name,
+          photoURL,
+          address,
+          updatedAt: new Date(),
+        },
+      };
+
+      const result = await usersCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+
     // DELETE endpoint to remove a user
     app.delete("/users/:id", async (req, res) => {
       const id = req.params.id;
@@ -926,7 +945,7 @@ async function run() {
               itemType: Number(itemType),
               itemQuantity: Number(itemQuantity),
               itemWeight: Number(itemWeight),
-              specialInstruction: specialInstruction || "", 
+              specialInstruction: specialInstruction || "",
               courierStatus: "assigning",
               courierTrackingId: null,
             },
