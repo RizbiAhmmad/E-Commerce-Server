@@ -658,7 +658,7 @@ async function run() {
 
           // console.log(" Pending Order SMS Sent Successfully!");
         } catch (smsErr) {
-          console.error("❌ Pending SMS sending failed:", smsErr.message);
+          console.error(" Pending SMS sending failed:", smsErr.message);
         }
 
         try {
@@ -1597,7 +1597,7 @@ async function run() {
           await sendSMS(phone, smsText);
           // console.log(" POS Order SMS sent successfully!");
         } catch (smsErr) {
-          console.error("❌ POS SMS sending failed:", smsErr.message);
+          console.error(" POS SMS sending failed:", smsErr.message);
         }
 
         // Clear POS cart
@@ -1886,9 +1886,9 @@ async function run() {
 
           await sendSMS(smsPhone, smsText);
 
-          console.log("✅ POS courier SMS sent");
+          // console.log("✅ POS courier SMS sent");
         } catch (smsErr) {
-          console.error("❌ POS courier SMS failed:", smsErr.message);
+          console.error(" POS courier SMS failed:", smsErr.message);
         }
 
         res.send({
@@ -1918,14 +1918,18 @@ async function run() {
         }));
 
         // POS orders
-        const posOrders = (await posOrdersCollection.find().toArray()).map(
-          (o) => ({
-            ...o,
-            orderType: "POS",
-            cartItems: o.cartItems || [],
-            createdAt: o.createdAt || o.orderDate || o.date,
-          })
-        );
+        const posOrders = (
+          await posOrdersCollection
+            .find({
+              isReturned: false,
+            })
+            .toArray()
+        ).map((o) => ({
+          ...o,
+          orderType: "POS",
+          cartItems: o.cartItems || [],
+          createdAt: o.createdAt || o.orderDate || o.date,
+        }));
 
         // Combine all
         const allOrders = [...deliveredOrders, ...posOrders];
@@ -2120,94 +2124,6 @@ async function run() {
         res.status(500).send({ message: "Failed to delete expense" });
       }
     });
-
-    // app.get("/expenses/report", async (req, res) => {
-    //   try {
-    //     const { startDate, endDate } = req.query;
-
-    //     let filter = {};
-    //     if (startDate && endDate) {
-    //       filter.date = {
-    //         $gte: new Date(startDate),
-    //         $lte: new Date(endDate),
-    //       };
-    //     }
-
-    //     const expenses = await expensesCollection.find(filter).toArray();
-    //     const now = new Date();
-
-    //     const total = expenses.reduce(
-    //       (sum, e) => sum + Number(e.price || 0),
-    //       0
-    //     );
-
-    //     // If custom date filter is applied → only return filtered total
-    //     if (startDate && endDate) {
-    //       return res.send({ total });
-    //     }
-
-    //     // Otherwise → full report
-    //     const today = expenses
-    //       .filter((e) => new Date(e.date).toDateString() === now.toDateString())
-    //       .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    //     const yesterdayDate = new Date(now);
-    //     yesterdayDate.setDate(now.getDate() - 1);
-    //     const yesterday = expenses
-    //       .filter(
-    //         (e) =>
-    //           new Date(e.date).toDateString() === yesterdayDate.toDateString()
-    //       )
-    //       .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    //     const weekStart = new Date(now);
-    //     weekStart.setDate(now.getDate() - 7);
-    //     const thisWeek = expenses
-    //       .filter((e) => new Date(e.date) >= weekStart)
-    //       .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    //     const prevWeekStart = new Date(now);
-    //     prevWeekStart.setDate(now.getDate() - 14);
-    //     const prevWeekEnd = new Date(now);
-    //     prevWeekEnd.setDate(now.getDate() - 7);
-    //     const previousWeek = expenses
-    //       .filter(
-    //         (e) =>
-    //           new Date(e.date) >= prevWeekStart &&
-    //           new Date(e.date) < prevWeekEnd
-    //       )
-    //       .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    //     const thisMonth = expenses
-    //       .filter(
-    //         (e) =>
-    //           new Date(e.date).getMonth() === now.getMonth() &&
-    //           new Date(e.date).getFullYear() === now.getFullYear()
-    //       )
-    //       .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    //     const previousMonth = expenses
-    //       .filter(
-    //         (e) =>
-    //           new Date(e.date).getMonth() === now.getMonth() - 1 &&
-    //           new Date(e.date).getFullYear() === now.getFullYear()
-    //       )
-    //       .reduce((sum, e) => sum + Number(e.price || 0), 0);
-
-    //     res.send({
-    //       total,
-    //       today,
-    //       yesterday,
-    //       thisWeek,
-    //       previousWeek,
-    //       thisMonth,
-    //       previousMonth,
-    //     });
-    //   } catch (error) {
-    //     console.error("Error generating report:", error);
-    //     res.status(500).send({ message: "Failed to generate report" });
-    //   }
-    // });
 
     app.get("/expenses/report", async (req, res) => {
       try {
@@ -2440,66 +2356,62 @@ async function run() {
       }
     });
 
-    // Add a new return product
-    app.post("/return-products", async (req, res) => {
+    app.get("/returned-orders", async (req, res) => {
       try {
-        const returnProduct = req.body;
-        const result = await returnProductsCollection.insertOne(returnProduct);
-        res.send(result);
-      } catch (error) {
-        console.error("Add Return Product Error:", error);
-        res.status(500).send({ error: "Failed to add return product" });
+        // Online returned orders
+        const onlineReturns = (
+          await ordersCollection.find({ status: "returned" }).toArray()
+        ).map((o) => ({
+          ...o,
+          source: "online",
+          fullName: o.fullName,
+          phone: o.phone,
+          email: o.email,
+          createdAt: o.returnDate || o.createdAt,
+        }));
+
+        // POS returned orders
+        const posReturns = (
+          await posOrdersCollection.find({ isReturned: true }).toArray()
+        ).map((o) => ({
+          ...o,
+          source: "pos",
+          fullName: o.customer?.name || "Walk-in Customer",
+          phone: o.customer?.phone || "-",
+          address: o.customer?.address || "-",
+          email: o.customer?.email || "-",
+          returnDate: o.returnedAt || o.createdAt,
+          returnReason: o.returnReason || "POS Return",
+        }));
+
+        res.send([...onlineReturns, ...posReturns]);
+      } catch (err) {
+        res.status(500).send({ message: "Failed to load return orders" });
       }
     });
 
-    // Get all return products
-    app.get("/return-products", async (req, res) => {
+    app.patch("/pos/orders/:id/return-info", async (req, res) => {
       try {
-        const result = await returnProductsCollection.find().toArray();
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ error: "Failed to fetch return products" });
-      }
-    });
-
-    // Get a single return product by ID
-    app.get("/return-products/:id", async (req, res) => {
-      try {
+        const { returnReason, returnDate } = req.body;
         const id = req.params.id;
-        const query = { _id: new ObjectId(id) };
-        const product = await returnProductsCollection.findOne(query);
-        res.send(product);
-      } catch (error) {
-        res.status(500).send({ error: "Failed to fetch return product" });
-      }
-    });
 
-    // Update a return product by ID
-    app.put("/return-products/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const updatedProduct = req.body;
-        const filter = { _id: new ObjectId(id) };
-        const updateDoc = { $set: updatedProduct };
-        const result = await returnProductsCollection.updateOne(
-          filter,
-          updateDoc
+        const result = await posOrdersCollection.updateOne(
+          { _id: new ObjectId(id), isReturned: true },
+          {
+            $set: {
+              returnReason,
+              returnedAt: returnDate ? new Date(returnDate) : new Date(),
+            },
+          }
         );
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ error: "Failed to update return product" });
-      }
-    });
 
-    // Delete a return product by ID
-    app.delete("/return-products/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const query = { _id: new ObjectId(id) };
-        const result = await returnProductsCollection.deleteOne(query);
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ error: "Failed to delete return product" });
+        if (result.modifiedCount === 0) {
+          return res.status(400).send({ message: "Return info not updated" });
+        }
+
+        res.send({ success: true });
+      } catch (err) {
+        res.status(500).send({ message: "Failed to update return info" });
       }
     });
 
@@ -2796,14 +2708,18 @@ async function run() {
         }));
 
         // POS orders
-        const posOrders = (await posOrdersCollection.find().toArray()).map(
-          (o) => ({
-            ...o,
-            orderType: "POS",
-            cartItems: o.cartItems || [],
-            createdAt: o.createdAt || o.date || new Date(),
-          })
-        );
+        const posOrders = (
+          await posOrdersCollection
+            .find({
+              isReturned: false,
+            })
+            .toArray()
+        ).map((o) => ({
+          ...o,
+          orderType: "POS",
+          cartItems: o.cartItems || [],
+          createdAt: o.createdAt || o.date || new Date(),
+        }));
 
         // Combine all
         const allOrders = [...deliveredOrders, ...posOrders];
