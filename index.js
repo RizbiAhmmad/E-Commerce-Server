@@ -11,54 +11,54 @@ const store_id = process.env.SSL_ID;
 const store_passwd = process.env.SSL_PASS;
 const is_live = false; // Sandbox mode
 
-// const sendSMS = async (phone, message) => {
-//   try {
-//     const apiKey = process.env.BULKSMS_API_KEY;
-//     const senderId = process.env.BULKSMS_SENDER_ID;
-
-//     console.log("API KEY:", apiKey);
-//     console.log("SENDER ID:", senderId);
-//     console.log("SMS PHONE:", phone);
-//     console.log("SMS MESSAGE:", message);
-
-//     const url = `http://bulksmsbd.net/api/smsapi?api_key=${apiKey}&type=text&number=${phone}&senderid=${senderId}&message=${encodeURIComponent(
-//       message
-//     )}`;
-
-//     console.log("Attempting SMS via URL:", url);
-//     const res = await axios.get(url);
-
-//     console.log("BulkSMS API Response Data:", res.data);
-
-//     return res.data;
-//   } catch (err) {
-//     console.error("SMS Network/System Error:", err.message);
-//     return null;
-//   }
-// };
-
 const sendSMS = async (phone, message) => {
   try {
-    const apiKey = process.env.REVE_API_KEY;
-    const secretKey = process.env.REVE_SECRET_KEY;
-    const senderId = process.env.REVE_SENDER_ID;
+    const apiKey = process.env.BULKSMS_API_KEY;
+    const senderId = process.env.BULKSMS_SENDER_ID;
 
-    const url = `https://smpp.revesms.com:7790/sendtext?apikey=${apiKey}&secretkey=${secretKey}&callerID=${encodeURIComponent(
-      senderId
-    )}&toUser=${phone}&messageContent=${encodeURIComponent(message)}`;
+    console.log("API KEY:", apiKey);
+    console.log("SENDER ID:", senderId);
+    console.log("SMS PHONE:", phone);
+    console.log("SMS MESSAGE:", message);
 
-    // console.log("REVE FINAL URL:", url);
+    const url = `http://bulksmsbd.net/api/smsapi?api_key=${apiKey}&type=text&number=${phone}&senderid=${senderId}&message=${encodeURIComponent(
+      message,
+    )}`;
 
+    console.log("Attempting SMS via URL:", url);
     const res = await axios.get(url);
 
-    // console.log("REVE API RESPONSE:", res.data);
+    console.log("BulkSMS API Response Data:", res.data);
 
     return res.data;
   } catch (err) {
-    console.error("REVE SMS Error:", err.message);
+    console.error("SMS Network/System Error:", err.message);
     return null;
   }
 };
+
+// const sendSMS = async (phone, message) => {
+//   try {
+//     const apiKey = process.env.REVE_API_KEY;
+//     const secretKey = process.env.REVE_SECRET_KEY;
+//     const senderId = process.env.REVE_SENDER_ID;
+
+//     const url = `https://smpp.revesms.com:7790/sendtext?apikey=${apiKey}&secretkey=${secretKey}&callerID=${encodeURIComponent(
+//       senderId
+//     )}&toUser=${phone}&messageContent=${encodeURIComponent(message)}`;
+
+//     // console.log("REVE FINAL URL:", url);
+
+//     const res = await axios.get(url);
+
+//     // console.log("REVE API RESPONSE:", res.data);
+
+//     return res.data;
+//   } catch (err) {
+//     console.error("REVE SMS Error:", err.message);
+//     return null;
+//   }
+// };
 
 app.use(cors());
 app.use(express.json());
@@ -309,7 +309,7 @@ async function run() {
       const data = req.body;
       const result = await brandsCollection.updateOne(
         { _id: new ObjectId(id) },
-        { $set: { name: data.name, logo: data.logo, status: data.status } }
+        { $set: { name: data.name, logo: data.logo, status: data.status } },
       );
       res.send(result);
     });
@@ -396,7 +396,7 @@ async function run() {
             hex: data.hex,
             status: data.status,
           },
-        }
+        },
       );
       res.send(result);
     });
@@ -606,7 +606,7 @@ async function run() {
       try {
         const result = await cartCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: updateDoc }
+          { $set: updateDoc },
         );
         res.send(result);
       } catch (error) {
@@ -669,7 +669,7 @@ async function run() {
               headers: {
                 Authorization: `Bearer ${process.env.BDCOURIER_API_KEY}`,
               },
-            }
+            },
           );
 
           const courierResult = courierCheckRes.data;
@@ -681,7 +681,7 @@ async function run() {
                 courierCheckStatus: "success",
                 courierCheckData: courierResult,
               },
-            }
+            },
           );
         } catch (err) {
           await ordersCollection.updateOne(
@@ -691,7 +691,7 @@ async function run() {
                 courierCheckStatus: "failed",
                 courierCheckData: err.response?.data || err.message,
               },
-            }
+            },
           );
         }
 
@@ -738,6 +738,110 @@ async function run() {
       }
     });
 
+    app.get("/orders/:id/courier-status", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        const order = await ordersCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!order || !order.courierTrackingId) {
+          return res.status(404).send({
+            success: false,
+            message: "Tracking ID not found",
+          });
+        }
+
+        if (order.courier !== "pathao") {
+          return res.status(400).send({
+            success: false,
+            message: "Courier is not Pathao",
+          });
+        }
+
+        const courier = await courierCollection.findOne({
+          courierName: "pathao",
+          status: "active",
+        });
+
+        if (!courier) {
+          return res.status(400).send({
+            success: false,
+            message: "Pathao not active",
+          });
+        }
+
+        // Get Token
+        const tokenRes = await axios.post(
+          `${courier.baseUrl}/aladdin/api/v1/issue-token`,
+          {
+            client_id: courier.clientId,
+            client_secret: courier.clientSecret,
+            username: courier.username,
+            password: courier.password,
+            grant_type: "password",
+          },
+        );
+
+        const accessToken = tokenRes.data.access_token;
+
+        //  Call Order Short Info API
+        const statusRes = await axios.get(
+          `${courier.baseUrl}/aladdin/api/v1/orders/${order.courierTrackingId}/info`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          },
+        );
+
+        const data = statusRes.data?.data;
+
+        const courierStatus = data?.order_status_slug;
+
+        // Update DB
+        await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              courierStatus: courierStatus,
+              courierLastUpdate: new Date(data?.updated_at),
+            },
+          },
+        );
+
+        //  Auto Mark Delivered
+        if (courierStatus?.toLowerCase() === "delivered") {
+          await ordersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                status: "delivered",
+                deliveredAt: new Date(),
+              },
+            },
+          );
+        }
+
+        res.send({
+          success: true,
+          courierStatus,
+          updatedAt: data?.updated_at,
+        });
+      } catch (error) {
+        console.error(
+          "PATHAO STATUS ERROR:",
+          error.response?.data || error.message,
+        );
+
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch Pathao status",
+        });
+      }
+    });
+
     // Delete an order
     app.delete("/orders/:id", async (req, res) => {
       const id = req.params.id;
@@ -756,7 +860,7 @@ async function run() {
       const result = await incompleteOrdersCollection.updateOne(
         { sessionId: data.sessionId },
         { $set: data },
-        { upsert: true }
+        { upsert: true },
       );
 
       res.send({ success: true });
@@ -786,6 +890,101 @@ async function run() {
       res.send({ success: true, message: "Incomplete order removed" });
     });
 
+   app.patch("/orders/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { cartItems, discount, shipping, shippingCost } = req.body;
+
+    const order = await ordersCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!order) {
+      return res.status(404).send({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    const isDelivered = order.status === "delivered";
+
+    // 🧠 STOCK ADJUST ONLY IF DELIVERED
+    if (isDelivered) {
+
+      // 1️⃣ Handle updated & added items
+      for (const newItem of cartItems) {
+        const oldItem = order.cartItems.find(
+          (i) => i.productId === newItem.productId
+        );
+
+        const oldQty = oldItem ? Number(oldItem.quantity) : 0;
+        const newQty = Number(newItem.quantity);
+
+        const diff = newQty - oldQty;
+
+        if (diff !== 0) {
+          await productsCollection.updateOne(
+            { _id: new ObjectId(newItem.productId) },
+            { $inc: { stock: -diff } }
+          );
+        }
+      }
+
+      // 2️⃣ Handle removed items
+      for (const oldItem of order.cartItems) {
+        const stillExists = cartItems.find(
+          (i) => i.productId === oldItem.productId
+        );
+
+        if (!stillExists) {
+          await productsCollection.updateOne(
+            { _id: new ObjectId(oldItem.productId) },
+            { $inc: { stock: Number(oldItem.quantity) } }
+          );
+        }
+      }
+    }
+
+    // 🧮 Recalculate
+    const subtotal = cartItems.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+
+    const total =
+      subtotal +
+      Number(shippingCost || 0) -
+      Number(discount || 0);
+
+    await ordersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          cartItems,
+          subtotal,
+          discount: Number(discount || 0),
+          shipping,
+          shippingCost: Number(shippingCost || 0),
+          total,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    res.send({
+      success: true,
+      message: "Order updated successfully",
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({
+      success: false,
+      message: "Update failed",
+    });
+  }
+});
+
     // Update order status & adjust stock
     app.patch("/orders/:id/status", async (req, res) => {
       console.log(" ORDER STATUS API HIT");
@@ -804,7 +1003,7 @@ async function run() {
 
         await ordersCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { status: status } }
+          { $set: { status: status } },
         );
 
         let smsText = "";
@@ -843,17 +1042,17 @@ async function run() {
             if (status === "delivered" && prevStatus !== "delivered") {
               await productsCollection.updateOne(
                 { _id: productId },
-                { $inc: { stock: -qty } }
+                { $inc: { stock: -qty } },
               );
             } else if (status === "returned" && prevStatus === "delivered") {
               await productsCollection.updateOne(
                 { _id: productId },
-                { $inc: { stock: qty } }
+                { $inc: { stock: qty } },
               );
             } else if (status === "cancelled" && prevStatus !== "delivered") {
               await productsCollection.updateOne(
                 { _id: productId },
-                { $inc: { stock: qty } }
+                { $inc: { stock: qty } },
               );
             }
           }
@@ -886,7 +1085,7 @@ async function run() {
 
         await ordersCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { returnDate: new Date(returnDate), returnReason } }
+          { $set: { returnDate: new Date(returnDate), returnReason } },
         );
 
         res.send({ success: true, message: "Return info updated" });
@@ -956,7 +1155,7 @@ async function run() {
               courierStatus: "assigning",
               courierTrackingId: null,
             },
-          }
+          },
         );
         // console.log("Order updated as assigning");
 
@@ -981,7 +1180,7 @@ async function run() {
               username: courier.username,
               password: courier.password,
               grant_type: "password",
-            }
+            },
           );
           // console.log("Token received:", tokenRes.data);
           return tokenRes.data.access_token;
@@ -1039,7 +1238,7 @@ async function run() {
                   status: "shipped",
                   shippedAt: new Date(),
                 },
-              }
+              },
             );
             // console.log("Tracking ID:", trackingId);
 
@@ -1058,7 +1257,7 @@ async function run() {
                   courierStatus: "failed",
                   courierError: err.response?.data || err.message,
                 },
-              }
+              },
             );
 
             return res.send({
@@ -1095,7 +1294,7 @@ async function run() {
                   courierStatus: "placed",
                   courierTrackingId: trackingId,
                 },
-              }
+              },
             );
 
             return res.send({
@@ -1110,7 +1309,7 @@ async function run() {
                   courierStatus: "failed",
                   courierError: err.response?.data || err.message,
                 },
-              }
+              },
             );
 
             return res.send({
@@ -1147,7 +1346,7 @@ async function run() {
                   courierStatus: "placed",
                   courierTrackingId: trackingId,
                 },
-              }
+              },
             );
 
             return res.send({
@@ -1162,7 +1361,7 @@ async function run() {
                   courierStatus: "failed",
                   courierError: err.response?.data || err.message,
                 },
-              }
+              },
             );
 
             return res.send({
@@ -1197,7 +1396,7 @@ async function run() {
 
         await courierCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { status } }
+          { $set: { status } },
         );
 
         res.send({
@@ -1243,7 +1442,7 @@ async function run() {
           },
           {
             $set: { status: "inactive" },
-          }
+          },
         );
 
         const status = req.query.status;
@@ -1281,7 +1480,7 @@ async function run() {
 
         const result = await couponsCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: updateData }
+          { $set: updateData },
         );
 
         res.send(result);
@@ -1345,7 +1544,7 @@ async function run() {
         const eligibleProductIds = (coupon.productIds || []).map(String);
 
         const eligibleItems = cartItems.filter((item) =>
-          eligibleProductIds.includes(String(item.productId))
+          eligibleProductIds.includes(String(item.productId)),
         );
 
         if (eligibleItems.length === 0) {
@@ -1477,18 +1676,18 @@ async function run() {
                 payment: "online",
                 paidAt: new Date(),
               },
-            }
+            },
           );
         } else {
           await ordersCollection.updateOne(
             { tran_id },
-            { $set: { paymentStatus: "failed" } }
+            { $set: { paymentStatus: "failed" } },
           );
         }
 
         // Redirect frontend to success page
         res.redirect(
-          `http://localhost:5173/payment-success?tran_id=${tran_id}`
+          `http://localhost:5173/payment-success?tran_id=${tran_id}`,
         );
       } catch (err) {
         console.error("Payment Success Error:", err);
@@ -1500,7 +1699,7 @@ async function run() {
       const { tran_id } = req.body;
       await ordersCollection.updateOne(
         { tran_id },
-        { $set: { paymentStatus: "failed" } }
+        { $set: { paymentStatus: "failed" } },
       );
       res.redirect("http://localhost:5173/payment-fail");
     });
@@ -1509,7 +1708,7 @@ async function run() {
       const { tran_id } = req.body;
       await ordersCollection.updateOne(
         { tran_id },
-        { $set: { paymentStatus: "cancelled" } }
+        { $set: { paymentStatus: "cancelled" } },
       );
       res.redirect("http://localhost:5173/payment-cancel");
     });
@@ -1543,7 +1742,7 @@ async function run() {
       try {
         const result = await posCartCollection.updateOne(
           { _id: new ObjectId(req.params.id) },
-          { $set: { quantity } }
+          { $set: { quantity } },
         );
         res.send(result);
       } catch (error) {
@@ -1580,7 +1779,7 @@ async function run() {
         for (const item of order.cartItems) {
           await productsCollection.updateOne(
             { _id: new ObjectId(item.productId) },
-            { $inc: { stock: -Number(item.quantity) } }
+            { $inc: { stock: -Number(item.quantity) } },
           );
         }
 
@@ -1637,7 +1836,7 @@ async function run() {
         // Last order by phone
         const lastOrder = await posOrdersCollection.findOne(
           { "customer.phone": cleanPhone },
-          { sort: { createdAt: -1 } }
+          { sort: { createdAt: -1 } },
         );
 
         if (!lastOrder) {
@@ -1673,6 +1872,70 @@ async function run() {
       }
     });
 
+    app.patch("/pos/orders/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const updatedData = { ...req.body };
+
+        //  Remove immutable fields
+        delete updatedData._id;
+        delete updatedData.createdAt;
+
+        const existingOrder = await posOrdersCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!existingOrder) {
+          return res.status(404).send({ message: "Order not found" });
+        }
+
+        //  Restore old stock
+        for (const item of existingOrder.cartItems) {
+          await productsCollection.updateOne(
+            { _id: new ObjectId(item.productId) },
+            { $inc: { stock: Number(item.quantity) } },
+          );
+        }
+
+        //  Deduct new stock
+        for (const item of updatedData.cartItems) {
+          await productsCollection.updateOne(
+            { _id: new ObjectId(item.productId) },
+            { $inc: { stock: -Number(item.quantity) } },
+          );
+        }
+
+        //  Recalculate
+        const subtotal = updatedData.cartItems.reduce(
+          (sum, item) => sum + item.price * item.quantity,
+          0,
+        );
+
+        const total =
+          subtotal +
+          Number(updatedData.shippingCharge || 0) -
+          Number(updatedData.discount || 0) +
+          Number(updatedData.tax || 0);
+
+        await posOrdersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              ...updatedData,
+              subtotal,
+              total,
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        res.send({ success: true });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to update POS order" });
+      }
+    });
+
     // Return POS order
     app.patch("/pos/orders/:id/return", async (req, res) => {
       try {
@@ -1689,14 +1952,14 @@ async function run() {
         for (const item of order.cartItems) {
           await productsCollection.updateOne(
             { _id: new ObjectId(item.productId) },
-            { $inc: { stock: Number(item.quantity) } }
+            { $inc: { stock: Number(item.quantity) } },
           );
         }
 
         // Mark order as returned
         await posOrdersCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { isReturned: true, returnedAt: new Date() } }
+          { $set: { isReturned: true, returnedAt: new Date() } },
         );
 
         res.send({
@@ -1756,7 +2019,7 @@ async function run() {
               courierStatus: "assigning",
               courierTrackingId: null,
             },
-          }
+          },
         );
 
         let trackingId = null;
@@ -1776,7 +2039,7 @@ async function run() {
               username: courier.username,
               password: courier.password,
               grant_type: "password",
-            }
+            },
           );
 
           const accessToken = tokenRes.data.access_token;
@@ -1803,7 +2066,7 @@ async function run() {
             payload,
             {
               headers: { Authorization: `Bearer ${accessToken}` },
-            }
+            },
           );
 
           trackingId =
@@ -1826,7 +2089,7 @@ async function run() {
             payload,
             {
               headers: { apiKey: courier.apiKey },
-            }
+            },
           );
 
           trackingId = resAPI.data?.consignment_id;
@@ -1846,7 +2109,7 @@ async function run() {
             payload,
             {
               headers: { "API-KEY": courier.apiKey },
-            }
+            },
           );
 
           trackingId = resAPI.data?.data?.tracking_code;
@@ -1862,7 +2125,7 @@ async function run() {
               specialInstruction,
               shippedAt: new Date(),
             },
-          }
+          },
         );
 
         try {
@@ -2004,9 +2267,8 @@ async function run() {
     // Add Expense Category
     app.post("/expense-categories", async (req, res) => {
       const expenseCategory = req.body;
-      const result = await expenseCategoriesCollection.insertOne(
-        expenseCategory
-      );
+      const result =
+        await expenseCategoriesCollection.insertOne(expenseCategory);
       res.send(result);
     });
 
@@ -2038,7 +2300,7 @@ async function run() {
               name: updatedData.name,
               status: updatedData.status,
             },
-          }
+          },
         );
 
         if (result.modifiedCount > 0) {
@@ -2101,7 +2363,7 @@ async function run() {
 
         const result = await expensesCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: updatedExpense }
+          { $set: updatedExpense },
         );
 
         res.send(result);
@@ -2145,7 +2407,7 @@ async function run() {
 
         const total = expenses.reduce(
           (sum, e) => sum + Number(e.price || 0),
-          0
+          0,
         );
 
         if (startDate && endDate) {
@@ -2165,7 +2427,7 @@ async function run() {
         const yesterday = expenses
           .filter(
             (e) =>
-              new Date(e.date).toDateString() === yesterdayDate.toDateString()
+              new Date(e.date).toDateString() === yesterdayDate.toDateString(),
           )
           .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
@@ -2183,7 +2445,7 @@ async function run() {
           .filter(
             (e) =>
               new Date(e.date) >= prevWeekStart &&
-              new Date(e.date) < prevWeekEnd
+              new Date(e.date) < prevWeekEnd,
           )
           .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
@@ -2191,7 +2453,7 @@ async function run() {
           .filter(
             (e) =>
               new Date(e.date).getMonth() === now.getMonth() &&
-              new Date(e.date).getFullYear() === now.getFullYear()
+              new Date(e.date).getFullYear() === now.getFullYear(),
           )
           .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
@@ -2199,7 +2461,7 @@ async function run() {
           .filter(
             (e) =>
               new Date(e.date).getMonth() === now.getMonth() - 1 &&
-              new Date(e.date).getFullYear() === now.getFullYear()
+              new Date(e.date).getFullYear() === now.getFullYear(),
           )
           .reduce((sum, e) => sum + Number(e.price || 0), 0);
 
@@ -2268,12 +2530,11 @@ async function run() {
         const damageProduct = req.body;
         const { productId, quantity } = damageProduct;
 
-        const damageResult = await damageProductsCollection.insertOne(
-          damageProduct
-        );
+        const damageResult =
+          await damageProductsCollection.insertOne(damageProduct);
         const stockUpdate = await productsCollection.updateOne(
           { _id: new ObjectId(productId) },
-          { $inc: { stock: -Number(quantity) } }
+          { $inc: { stock: -Number(quantity) } },
         );
 
         res.send({ damageResult, stockUpdate });
@@ -2322,7 +2583,7 @@ async function run() {
         const updateDoc = { $set: updatedProduct };
         const result = await damageProductsCollection.updateOne(
           filter,
-          updateDoc
+          updateDoc,
         );
 
         if (updatedProduct.productId && updatedProduct.quantity !== undefined) {
@@ -2333,7 +2594,7 @@ async function run() {
             // Update stock accordingly
             await productsCollection.updateOne(
               { _id: new ObjectId(updatedProduct.productId) },
-              { $inc: { stock: -diff } }
+              { $inc: { stock: -diff } },
             );
           }
         }
@@ -2402,7 +2663,7 @@ async function run() {
               returnReason,
               returnedAt: returnDate ? new Date(returnDate) : new Date(),
             },
-          }
+          },
         );
 
         if (result.modifiedCount === 0) {
@@ -2452,7 +2713,7 @@ async function run() {
       const updateData = req.body;
       const result = await sliderCollection.updateOne(
         { _id: new ObjectId(id) },
-        { $set: updateData }
+        { $set: updateData },
       );
       res.send(result);
     });
@@ -2496,7 +2757,7 @@ async function run() {
         const result = await footerCollection.findOneAndUpdate(
           { _id: new ObjectId(id) },
           { $set: req.body },
-          { returnDocument: "after" }
+          { returnDocument: "after" },
         );
         res.send(result.value);
       } catch (err) {
@@ -2534,7 +2795,7 @@ async function run() {
               ...cat,
               subcategories: subs,
             };
-          })
+          }),
         );
 
         res.send(categoriesWithSub);
@@ -2583,7 +2844,7 @@ async function run() {
       try {
         const result = await offerCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: updateData }
+          { $set: updateData },
         );
         res.send(result);
       } catch (err) {
@@ -2623,7 +2884,7 @@ async function run() {
         if (existing) {
           await courierCollection.updateOne(
             { courierName: data.courierName },
-            { $set: data }
+            { $set: data },
           );
         } else {
           await courierCollection.insertOne(data);
@@ -2850,7 +3111,7 @@ async function run() {
         const updateData = req.body;
         const result = await policiesCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: updateData }
+          { $set: updateData },
         );
         res.send(result);
       } catch (err) {
@@ -2914,7 +3175,7 @@ async function run() {
 
         const result = await landingPagesCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: updateData }
+          { $set: updateData },
         );
         res.send(result);
       } catch (err) {
@@ -2952,7 +3213,7 @@ async function run() {
         const result = await shippingCollection.updateOne(
           filter,
           updateDoc,
-          options
+          options,
         );
 
         res.send({
@@ -2986,7 +3247,7 @@ async function run() {
         const result = await gtmCollection.updateOne(
           filter,
           updateDoc,
-          options
+          options,
         );
 
         res.send({
