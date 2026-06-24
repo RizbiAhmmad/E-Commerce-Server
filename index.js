@@ -110,6 +110,7 @@ async function run() {
     const shippingCollection = database.collection("shipping");
     const incompleteOrdersCollection = database.collection("incomplete_orders");
     const gtmCollection = database.collection("gtm_settings");
+    const noticeCollection = database.collection("notice");
 
     // POST endpoint to save user data (with role)
     app.post("/users", async (req, res) => {
@@ -890,100 +891,95 @@ async function run() {
       res.send({ success: true, message: "Incomplete order removed" });
     });
 
-   app.patch("/orders/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const { cartItems, discount, shipping, shippingCost } = req.body;
+    app.patch("/orders/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { cartItems, discount, shipping, shippingCost } = req.body;
 
-    const order = await ordersCollection.findOne({
-      _id: new ObjectId(id),
-    });
+        const order = await ordersCollection.findOne({
+          _id: new ObjectId(id),
+        });
 
-    if (!order) {
-      return res.status(404).send({
-        success: false,
-        message: "Order not found",
-      });
-    }
+        if (!order) {
+          return res.status(404).send({
+            success: false,
+            message: "Order not found",
+          });
+        }
 
-    const isDelivered = order.status === "delivered";
+        const isDelivered = order.status === "delivered";
 
-    // 🧠 STOCK ADJUST ONLY IF DELIVERED
-    if (isDelivered) {
+        if (isDelivered) {
+          //  Handle updated & added items
+          for (const newItem of cartItems) {
+            const oldItem = order.cartItems.find(
+              (i) => i.productId === newItem.productId,
+            );
 
-      // 1️⃣ Handle updated & added items
-      for (const newItem of cartItems) {
-        const oldItem = order.cartItems.find(
-          (i) => i.productId === newItem.productId
+            const oldQty = oldItem ? Number(oldItem.quantity) : 0;
+            const newQty = Number(newItem.quantity);
+
+            const diff = newQty - oldQty;
+
+            if (diff !== 0) {
+              await productsCollection.updateOne(
+                { _id: new ObjectId(newItem.productId) },
+                { $inc: { stock: -diff } },
+              );
+            }
+          }
+
+          //  Handle removed items
+          for (const oldItem of order.cartItems) {
+            const stillExists = cartItems.find(
+              (i) => i.productId === oldItem.productId,
+            );
+
+            if (!stillExists) {
+              await productsCollection.updateOne(
+                { _id: new ObjectId(oldItem.productId) },
+                { $inc: { stock: Number(oldItem.quantity) } },
+              );
+            }
+          }
+        }
+
+        //  Recalculate
+        const subtotal = cartItems.reduce(
+          (sum, item) => sum + item.price * item.quantity,
+          0,
         );
 
-        const oldQty = oldItem ? Number(oldItem.quantity) : 0;
-        const newQty = Number(newItem.quantity);
+        const total =
+          subtotal + Number(shippingCost || 0) - Number(discount || 0);
 
-        const diff = newQty - oldQty;
-
-        if (diff !== 0) {
-          await productsCollection.updateOne(
-            { _id: new ObjectId(newItem.productId) },
-            { $inc: { stock: -diff } }
-          );
-        }
-      }
-
-      // 2️⃣ Handle removed items
-      for (const oldItem of order.cartItems) {
-        const stillExists = cartItems.find(
-          (i) => i.productId === oldItem.productId
+        await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              cartItems,
+              subtotal,
+              discount: Number(discount || 0),
+              shipping,
+              shippingCost: Number(shippingCost || 0),
+              total,
+              updatedAt: new Date(),
+            },
+          },
         );
 
-        if (!stillExists) {
-          await productsCollection.updateOne(
-            { _id: new ObjectId(oldItem.productId) },
-            { $inc: { stock: Number(oldItem.quantity) } }
-          );
-        }
+        res.send({
+          success: true,
+          message: "Order updated successfully",
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({
+          success: false,
+          message: "Update failed",
+        });
       }
-    }
-
-    // 🧮 Recalculate
-    const subtotal = cartItems.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0
-    );
-
-    const total =
-      subtotal +
-      Number(shippingCost || 0) -
-      Number(discount || 0);
-
-    await ordersCollection.updateOne(
-      { _id: new ObjectId(id) },
-      {
-        $set: {
-          cartItems,
-          subtotal,
-          discount: Number(discount || 0),
-          shipping,
-          shippingCost: Number(shippingCost || 0),
-          total,
-          updatedAt: new Date(),
-        },
-      }
-    );
-
-    res.send({
-      success: true,
-      message: "Order updated successfully",
     });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({
-      success: false,
-      message: "Update failed",
-    });
-  }
-});
 
     // Update order status & adjust stock
     app.patch("/orders/:id/status", async (req, res) => {
@@ -2484,37 +2480,35 @@ async function run() {
     // Get customer segments
     app.get("/customer-segments", async (req, res) => {
       try {
-        const pipeline = [
-          {
-            $group: {
-              _id: "$email",
-              name: { $first: "$fullName" },
-              district: { $first: "$district" },
-              phone: { $first: "$phone" },
-              totalOrders: { $sum: 1 },
-              totalSpend: { $sum: "$total" },
-              lastOrder: { $max: "$createdAt" },
-            },
-          },
-          {
-            $addFields: {
-              segment: {
-                $switch: {
-                  branches: [
-                    { case: { $gte: ["$totalOrders", 10] }, then: "Loyal" },
-                    {
-                      case: { $gte: ["$totalSpend", 20000] },
-                      then: "High Spender",
-                    },
-                    { case: { $gte: ["$totalOrders", 3] }, then: "Regular" },
-                  ],
-                  default: "One-time",
-                },
-              },
-            },
-          },
-          { $sort: { totalSpend: -1 } },
-        ];
+       const pipeline = [
+  {
+    $group: {
+      _id: { $ifNull: ["$phone", "$email"] }, // phone priority, email fallback
+      name: { $first: "$fullName" },
+      email: { $first: "$email" },
+      phone: { $first: "$phone" },
+      district: { $first: "$district" },
+      totalOrders: { $sum: 1 },
+      totalSpend: { $sum: "$total" },
+      lastOrder: { $max: "$createdAt" },
+    },
+  },
+  {
+    $addFields: {
+      segment: {
+        $switch: {
+          branches: [
+            { case: { $gte: ["$totalOrders", 10] }, then: "Loyal" },
+            { case: { $gte: ["$totalSpend", 20000] }, then: "High Spender" },
+            { case: { $gte: ["$totalOrders", 3] }, then: "Regular" },
+          ],
+          default: "One-time",
+        },
+      },
+    },
+  },
+  { $sort: { totalSpend: -1 } },
+];
 
         const segments = await ordersCollection.aggregate(pipeline).toArray();
         res.send(segments);
@@ -3263,6 +3257,40 @@ async function run() {
     app.get("/gtm", async (req, res) => {
       const gtm = await gtmCollection.findOne({});
       res.send(gtm);
+    });
+
+    app.post("/notice", async (req, res) => {
+      try {
+        const { title, description, buttonText, delay, isActive } = req.body;
+
+        const filter = {};
+        const updateDoc = {
+          $set: {
+            title,
+            description,
+            buttonText,
+            delay: Number(delay) || 3000,
+            isActive: Boolean(isActive),
+          },
+        };
+
+        const options = { upsert: true };
+
+        const result = await noticeCollection.updateOne(
+          filter,
+          updateDoc,
+          options,
+        );
+
+        res.send({ success: true, result });
+      } catch (error) {
+        res.status(500).send({ success: false, message: error.message });
+      }
+    });
+
+    app.get("/notice", async (req, res) => {
+      const notice = await noticeCollection.findOne({});
+      res.send(notice);
     });
 
     // await client.db("admin").command({ ping: 1 });
