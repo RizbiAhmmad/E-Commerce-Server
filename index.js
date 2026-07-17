@@ -107,6 +107,7 @@ async function run() {
     const whisperCollection = database.collection("wispers");
     const policiesCollection = database.collection("policies");
     const landingPagesCollection = database.collection("landing_pages");
+    const blogsCollection = database.collection("blogs");
     const shippingCollection = database.collection("shipping");
     const incompleteOrdersCollection = database.collection("incomplete_orders");
     const gtmCollection = database.collection("gtm_settings");
@@ -3125,6 +3126,91 @@ async function run() {
       } catch (err) {
         console.error(err);
         res.status(500).send({ error: "Failed to delete policy" });
+      }
+    });
+
+    // Add a new blog
+    app.post("/blogs", async (req, res) => {
+      try {
+        const blog = req.body;
+        blog.createdAt = new Date();
+        const result = await blogsCollection.insertOne(blog);
+        res.send(result);
+      } catch (error) {
+        console.error("Error adding blog:", error);
+        res.status(500).send({ message: "Failed to add blog" });
+      }
+    });
+
+    // Get all blogs (optionally filter by status)
+    app.get("/blogs", async (req, res) => {
+      try {
+        const { status } = req.query;
+        const query = status ? { status } : {};
+        const blogs = await blogsCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send(blogs);
+      } catch (error) {
+        console.error("Error fetching blogs:", error);
+        res.status(500).send({ message: "Failed to fetch blogs" });
+      }
+    });
+
+    // Get a single blog by ID
+    app.get("/blogs/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid blog ID" });
+        }
+        const blog = await blogsCollection.findOne({ _id: new ObjectId(id) });
+        if (!blog) {
+          return res.status(404).send({ message: "Blog not found" });
+        }
+        res.send(blog);
+      } catch (error) {
+        console.error("Error fetching blog:", error);
+        res.status(500).send({ message: "Failed to fetch blog" });
+      }
+    });
+
+    // Update a blog by ID
+    app.put("/blogs/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const data = req.body;
+        const result = await blogsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              title: data.title,
+              description: data.description,
+              keywords: data.keywords,
+              image: data.image,
+              status: data.status,
+            },
+          },
+        );
+        res.send(result);
+      } catch (error) {
+        console.error("Error updating blog:", error);
+        res.status(500).send({ message: "Failed to update blog" });
+      }
+    });
+
+    // Delete a blog by ID
+    app.delete("/blogs/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await blogsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting blog:", error);
+        res.status(500).send({ message: "Failed to delete blog" });
       }
     });
 
